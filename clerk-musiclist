@@ -24,8 +24,8 @@ def log_message(message, stage_start_time=None):
         elapsed_stage = time.monotonic() - stage_start_time
         log_entry = f"[{current_time} | Stage: {elapsed_stage:>6.3f}s | Total: {elapsed_total:>7.3f}s] {message}"
         
-    print(log_entry, file=sys.stdout) 
-    sys.stdout.flush() 
+    print(log_entry, file=sys.stdout)
+    sys.stdout.flush()
 
 # --- Configuration ---
 log_message("Script started. Initializing configuration...")
@@ -36,7 +36,11 @@ clerk_data_dir = os.path.join(xdg_data_home, 'clerk')
 album_cache_file = os.path.join(clerk_data_dir, 'album.cache')
 album_ratings_cache_file = os.path.join(clerk_data_dir, 'ratings.cache')
 
-sync_target_base = 'proteus:/srv/http/list' 
+# --- CONFIGURABLE: Sync Target Host and Path ---
+sync_host = environ.get('CLERK_SYNC_HOST', 'proteus')
+sync_path = environ.get('CLERK_SYNC_PATH', '/srv/http/list')
+sync_target_base = f"{sync_host}:{sync_path}" # Use f-string for cleaner concatenation
+
 sync_target_html = os.path.join(sync_target_base, 'index.html')
 
 log_message("Configuration initialized.", config_start_time)
@@ -104,7 +108,7 @@ for album_data_raw in album_list_raw:
     except (ValueError, TypeError): year_int = 0
 
     albums_data_for_embedding.append({
-        'id': album_key, 
+        'id': album_key,
         'artist': album_data_raw.get('albumartist', 'Unknown Artist'),
         'album': album_data_raw.get('album', 'Unknown Album'),
         'year': album_data_raw.get('date', 'N/A'),
@@ -127,7 +131,7 @@ log_message("Data successfully converted to JSON.", json_conversion_start_time)
 
 # --- Generate HTML with Embedded JS ---
 
-temp_html_file = "/tmp/musiclist_albums_only.html" 
+temp_html_file = "/tmp/musiclist_albums_only.html"
 log_message(f"Generating HTML file at: {temp_html_file}...")
 html_gen_start_time = time.monotonic()
 
@@ -189,7 +193,7 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
     <div class="mb-6 bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm flex flex-wrap gap-4 items-end">
         <div class="flex-grow min-w-[200px]"> <label for="filter" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Filter:</label>
             <input type="text" id="filter" placeholder="Artist, album, year, or r=N..."
-                   class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                           class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
         </div>
         <button id="clearFilter" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm">Clear</button>
     </div>
@@ -200,11 +204,11 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
                 <thead class="bg-gray-50 dark:bg-gray-700">
                     <tr>
                         <th scope="col" data-sort="artist" class="sortable px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                           Artist <span class="sort-icon"></span> </th>
+                            Artist <span class="sort-icon"></span> </th>
                         <th scope="col" data-sort="album" class="sortable px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                             Album <span class="sort-icon"></span>
                         </th>
-                        <th scope="col" data-sort="year" class="sortable px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-28"> 
+                        <th scope="col" data-sort="year" class="sortable px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-28">
                             Year <span class="sort-icon"></span>
                         </th>
                         <th scope="col" data-sort="rating" class="sortable px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-32">
@@ -244,14 +248,14 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
         // console.log('[DOMContentLoaded] Initial html classes on load:', document.documentElement.className);
 
         const allAlbums = ''' + json_data + '''; // Renamed back
-        const SYMBOL_FILTER_KEY = "#SYMBOLS#"; 
+        const SYMBOL_FILTER_KEY = "#SYMBOLS#";
 
         let currentPage = 1;
         let itemsPerPage = 50;
         let currentSortColumn = 'artist';
         let currentSortDirection = 'asc';
-        let currentTextFilter = ''; 
-        let currentLetterFilter = null; 
+        let currentTextFilter = '';
+        let currentLetterFilter = null;
         let filteredAndSortedAlbums = [];
         // const expandedAlbums = new Set(); // Removed
 
@@ -275,25 +279,25 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
         function generateAlphabetButtons() {
             const availableLetters = new Set();
             let hasSymbolChars = false;
-            allAlbums.forEach(album => { 
+            allAlbums.forEach(album => {
                 if (album.artist && album.artist.length > 0) {
                     const firstCharNormalized = normalizeForSearch(album.artist[0]);
                     if (firstCharNormalized) {
                         if (firstCharNormalized >= 'A' && firstCharNormalized <= 'Z') {
                             availableLetters.add(firstCharNormalized);
                         } else {
-                            hasSymbolChars = true; 
+                            hasSymbolChars = true;
                         }
                     }
                 }
             });
 
-            alphabetButtonsContainer.innerHTML = ''; 
+            alphabetButtonsContainer.innerHTML = '';
 
             const allButton = document.createElement('button');
             allButton.textContent = 'All';
             allButton.className = 'alpha-button px-3 py-1 sm:px-4 sm:py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium';
-            allButton.dataset.letter = "ALL"; 
+            allButton.dataset.letter = "ALL";
             alphabetButtonsContainer.appendChild(allButton);
             
             const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split('');
@@ -318,7 +322,7 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
             alphabetButtonsContainer.querySelectorAll('.alpha-button').forEach(button => {
                 button.addEventListener('click', () => handleAlphabetFilterClick(button.dataset.letter));
             });
-            updateAlphabetButtonStyles(); 
+            updateAlphabetButtonStyles();
         }
         
         function updateAlphabetButtonStyles() {
@@ -335,8 +339,8 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
         function handleAlphabetFilterClick(letterOrKey) {
             if (letterOrKey === "ALL") {
                 currentLetterFilter = null;
-            } else if (currentLetterFilter === letterOrKey) { 
-                currentLetterFilter = null; 
+            } else if (currentLetterFilter === letterOrKey) {
+                currentLetterFilter = null;
             } else {
                 currentLetterFilter = letterOrKey;
             }
@@ -354,23 +358,23 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
         }
 
         function applyFilterAndSort() {
-            let ratingFilterValue = -1; 
+            let ratingFilterValue = -1;
             const rawFilterTerms = currentTextFilter.toLowerCase().split(' ').filter(term => term.length > 0);
             const textSearchTerms = [];
 
             rawFilterTerms.forEach(term => {
                 if (term.startsWith("r=") && term.length > "r=".length) {
                     const numStr = term.substring("r=".length);
-                    if (/^\\d{1,2}$/.test(numStr)) { 
+                    if (/^\\d{1,2}$/.test(numStr)) {
                         const num = parseInt(numStr, 10);
-                        if (num >= 0 && num <= 10) { 
+                        if (num >= 0 && num <= 10) {
                             ratingFilterValue = num;
                         } else { textSearchTerms.push(term); }
                     } else { textSearchTerms.push(term); }
                 } else { textSearchTerms.push(term); }
             });
 
-            let processedAlbums = [...allAlbums]; 
+            let processedAlbums = [...allAlbums];
 
             if (currentLetterFilter) {
                 if (currentLetterFilter === SYMBOL_FILTER_KEY) {
@@ -379,7 +383,7 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
                         const firstCharNormalized = normalizeForSearch(album.artist[0]);
                         return !(firstCharNormalized >= 'A' && firstCharNormalized <= 'Z');
                     });
-                } else { 
+                } else {
                     processedAlbums = processedAlbums.filter(album => {
                         if (!album.artist || album.artist.length === 0) return false;
                         const firstCharNormalized = normalizeForSearch(album.artist[0]);
@@ -479,7 +483,7 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
                      header.classList.add(currentSortDirection === 'asc' ? 'sorted-asc' : 'sorted-desc');
                  }
              });
-         }
+           }
 
         // --- Event Listeners ---
         let filterTimeout;
@@ -494,9 +498,9 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
         clearFilterButton.addEventListener('click', () => {
             filterInput.value = '';
             currentTextFilter = '';
-            currentLetterFilter = null; 
+            currentLetterFilter = null;
             // expandedAlbums.clear(); // Removed
-            updateAlphabetButtonStyles(); 
+            updateAlphabetButtonStyles();
             applyFilterAndSort();
         });
 
@@ -508,10 +512,10 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
             if (currentPage < totalPages) { currentPage++; updateTable(); updatePaginationControls(); window.scrollTo(0, 0); }
         });
         itemsPerPageSelect.addEventListener('change', (e) => {
-             itemsPerPage = parseInt(e.target.value, 10); currentPage = 1; 
+             itemsPerPage = parseInt(e.target.value, 10); currentPage = 1;
              // expandedAlbums.clear(); // Removed
              updateTable(); updatePaginationControls();
-         });
+           });
         tableHeaders.forEach(header => {
             header.addEventListener('click', () => {
                 const sortKey = header.getAttribute('data-sort');
@@ -528,7 +532,7 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
         if (darkModeToggle) {
             darkModeToggle.addEventListener('click', () => {
                 const isDarkMode = document.documentElement.classList.toggle('dark');
-                try { localStorage.theme = isDarkMode ? 'dark' : 'light'; } 
+                try { localStorage.theme = isDarkMode ? 'dark' : 'light'; }
                 catch (e) { console.error('[Dark Mode Toggle] Error saving theme to localStorage:', e); }
             });
         } else { console.error('[DOMContentLoaded] Dark mode toggle button not found!'); }
@@ -536,8 +540,8 @@ with open(temp_html_file, "w", encoding='utf-8') as f:
         // --- Initial Load ---
         try {
             itemsPerPage = parseInt(itemsPerPageSelect.value, 10);
-            generateAlphabetButtons(); 
-            applyFilterAndSort(); 
+            generateAlphabetButtons();
+            applyFilterAndSort();
             updateSortIndicators();
         } catch(e) {
             console.error("[Initial Load] Error during setup:", e);
@@ -576,9 +580,9 @@ finally:
     try:
         log_message(f"Removing temporary file: {temp_html_file}")
         if os.path.exists(temp_html_file):
-             rm_result = subprocess.run(['rm', temp_html_file], capture_output=True, text=True, check=False) 
-             if rm_result.returncode != 0:
-                  log_message(f"Warning: Failed to remove temporary file {temp_html_file}: {rm_result.stderr}", file=sys.stderr)
+            rm_result = subprocess.run(['rm', temp_html_file], capture_output=True, text=True, check=False)
+            if rm_result.returncode != 0:
+                log_message(f"Warning: Failed to remove temporary file {temp_html_file}: {rm_result.stderr}", file=sys.stderr)
         log_message("Temporary file cleanup finished.", cleanup_start_time)
     except Exception as e:
         log_message(f"Error removing temporary file {temp_html_file}: {e}", file=sys.stderr)
@@ -586,9 +590,8 @@ finally:
 log_message("File sync and cleanup finished.", sync_start_time)
 
 if sync_error:
-     log_message("Script finished with sync errors.", file=sys.stderr)
-     sys.exit(1)
+    log_message("Script finished with sync errors.", file=sys.stderr)
+    sys.exit(1)
 else:
-     log_message("Script finished successfully.")
-     sys.exit(0)
-
+    log_message("Script finished successfully.")
+    sys.exit(0)
