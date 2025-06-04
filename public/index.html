@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Music Clerk</title>
+
+  <!-- Tailwind CSS via CDN for easy styling -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css"
+    rel="stylesheet"
+  />
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+    #root {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .table-wrapper {
+      flex: 1 1 auto;
+      overflow-y: auto;
+    }
+  </style>
+
+  <!-- React / ReactDOM via CDN -->
+  <script
+    crossorigin
+    src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"
+  ></script>
+  <script
+    crossorigin
+    src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"
+  ></script>
+  <!-- Babel for in-browser JSX transpile (dev only!) -->
+  <script src="https://cdn.jsdelivr.net/npm/babel-standalone@6/babel.min.js"></script>
+</head>
+<body class="bg-gray-50">
+  <div id="root" class="p-4 max-w-4xl mx-auto"></div>
+
+  <!-- This pulls in your React app code -->
+  <script type="text/babel" src="script.js"></script>
+</body>
+</html>
+
