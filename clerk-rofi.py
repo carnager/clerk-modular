@@ -5,37 +5,75 @@ import sys
 import subprocess
 import toml
 from mpd import MPDClient
-import clerk_core as core
+import clerk_core as core # Assuming clerk_core is a valid module
 
-# ── Load Rofi UI Config ─────────────────────────────────────────────────────────
-xdg_config  = os.environ.get('XDG_CONFIG_HOME',
-                            os.path.join(os.environ.get('HOME',''),'.config'))
-conf_path   = os.path.join(xdg_config, 'clerk', 'clerk-rofi.conf')
-cfg         = toml.load(conf_path)
+# --- Configuration File Handling ------------------------------------------------
+xdg_config = os.environ.get('XDG_CONFIG_HOME', os.path.join(os.environ.get('HOME', ''), '.config'))
+conf_dir = os.path.join(xdg_config, 'clerk')
+conf_path = os.path.join(conf_dir, 'clerk-rofi.conf')
+
+# Default configuration values
+DEFAULT_CONFIG = {
+    'general': {
+        'menu_prompt': 'Clerk',
+        'menu_tool': ['rofi', '-dmenu', '-p', 'PLACEHOLDER']
+    },
+    'columns': {
+        'artist_width': 30,
+        'albumartist_width': 30,
+        'date_width': 6,
+        'album_width': 40,
+        'id_width': 5,
+        'title_width': 40,
+        'track_width': 5
+    }
+}
+
+# Check if config directory exists, if not, create it
+os.makedirs(conf_dir, exist_ok=True)
+
+# Check if config file exists, if not, create it with default values
+if not os.path.exists(conf_path):
+    print(f"Configuration file not found. Generating default config at: {conf_path}", file=sys.stderr)
+    try:
+        with open(conf_path, 'w') as f:
+            toml.dump(DEFAULT_CONFIG, f)
+    except IOError as e:
+        print(f"Fatal: Could not create config file {conf_path} – {e}", file=sys.stderr)
+        sys.exit(1)
+
+# Load Rofi UI Config
+try:
+    cfg = toml.load(conf_path)
+except toml.TomlDecodeError as e:
+    print(f"Fatal: Error decoding TOML configuration file {conf_path} – {e}", file=sys.stderr)
+    sys.exit(1)
+except FileNotFoundError:
+    # This case should ideally be caught by the os.path.exists check, but good for robustness
+    print(f"Fatal: Configuration file {conf_path} not found after creation attempt.", file=sys.stderr)
+    sys.exit(1)
+
 
 menu_prompt = cfg['general']['menu_prompt']
-menu_tool   = [w.replace('PLACEHOLDER', menu_prompt)
-               for w in cfg['general']['menu_tool']]
+menu_tool = [w.replace('PLACEHOLDER', menu_prompt) for w in cfg['general']['menu_tool']]
 
 # Column widths
-artist_w      = int(cfg['columns']['artist_width'])
+artist_w = int(cfg['columns']['artist_width'])
 albumartist_w = int(cfg['columns']['albumartist_width'])
-date_w        = int(cfg['columns']['date_width'])
-album_w       = int(cfg['columns']['album_width'])
-id_w          = int(cfg['columns']['id_width'])
-title_w       = int(cfg['columns']['title_width'])
-track_w       = int(cfg['columns']['track_width'])
+date_w = int(cfg['columns']['date_width'])
+album_w = int(cfg['columns']['album_width'])
+id_w = int(cfg['columns']['id_width'])
+title_w = int(cfg['columns']['title_width'])
+track_w = int(cfg['columns']['track_width'])
 
 # ── MPD Connection ──────────────────────────────────────────────────────────────
 m = MPDClient()
-mpd_host = os.environ.get('MPD_HOST',
-                          core.core_config['general']['mpd_host'])
+mpd_host = os.environ.get('MPD_HOST', core.core_config['general']['mpd_host'])
 try:
     m.connect(mpd_host, 6600)
     m.ping()
 except Exception as e:
-    print(f"Fatal: cannot connect to MPD at {mpd_host}:6600 – {e}",
-          file=sys.stderr)
+    print(f"Fatal: cannot connect to MPD at {mpd_host}:6600 – {e}", file=sys.stderr)
     sys.exit(1)
 
 # ── Rofi Menu Helper ────────────────────────────────────────────────────────────
@@ -45,11 +83,11 @@ def _menu(lines, trim='no'):
     Otherwise, return the single selected line.
     """
     p = subprocess.Popen(menu_tool,
-                         stdin=subprocess.PIPE,
-                         stdout=subprocess.PIPE,
-                         stderr=subprocess.DEVNULL)
+                             stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL)
     inp = "\n".join(lines).encode('utf-8')
-    out,_ = p.communicate(inp)
+    out, _ = p.communicate(inp)
     if p.returncode != 0:
         return [] if trim=='yes' else ''
     sel = out.decode('utf-8', errors='replace').splitlines()
@@ -65,12 +103,12 @@ def _menu(lines, trim='no'):
 
 # ── Formatting Helpers ─────────────────────────────────────────────────────────
 def format_album_line(a):
-    key    = core.get_album_key(a)
+    key = core.get_album_key(a)
     rating = core.album_ratings.get(key, '-')
-    base   = (f"{a['albumartist']:<{albumartist_w}} "
-              f"{a['date']:<{date_w}} "
-              f"{a['album']:<{album_w}} "
-              f"{a['id']:<{id_w}}")
+    base = (f"{a['albumartist']:<{albumartist_w}} "
+            f"{a['date']:<{date_w}} "
+            f"{a['album']:<{album_w}} "
+            f"{a['id']:<{id_w}}")
     return f"{base} r={rating}"
 
 def format_track_line(t):
@@ -79,16 +117,16 @@ def format_track_line(t):
         track = track[0] if track else ''
     key = core.get_album_key({
         'albumartist': t['artist'],
-        'album':       t['album'],
-        'date':        t.get('date','0000'),
+        'album': t['album'],
+        'date': t.get('date','0000'),
     })
     rating = core.album_ratings.get(key, '-')
-    base   = (f"{track:<{track_w}} "
-              f"{t['title']:<{title_w}} "
-              f"{t['artist']:<{artist_w}} "
-              f"{t['album']:<{album_w}} "
-              f"{t.get('date','0000'):<{date_w}} "
-              f"{t['id']:<{id_w}}")
+    base = (f"{track:<{track_w}} "
+            f"{t['title']:<{title_w}} "
+            f"{t['artist']:<{artist_w}} "
+            f"{t['album']:<{album_w}} "
+            f"{t.get('date','0000'):<{date_w}} "
+            f"{t['id']:<{id_w}}")
     return f"{base} r={rating}"
 
 # ── UI Actions ─────────────────────────────────────────────────────────────────
@@ -113,10 +151,10 @@ def add_album(mode):
             if a['id'] in selected_ids:
                 prompt = f"{a['albumartist']} - {a['album']}"
                 new_rating = core.input_rating(prompt,
-                                               menu_tool,
-                                               menu_prompt)
+                                                menu_tool,
+                                                menu_prompt)
                 core.update_album_rating(a, new_rating)
-        return  # done rating
+        return # done rating
 
     # Add/Insert/Replace
     picked = [a for a in albums if a['id'] in selected_ids]
@@ -146,8 +184,8 @@ def add_track():
             if t['id'] in selected_ids:
                 prompt = f"{t['artist']} - {t['title']}"
                 val = core.input_rating(prompt,
-                                        menu_tool,
-                                        menu_prompt)
+                                         menu_tool,
+                                         menu_prompt)
                 if val == 'Delete':
                     m.sticker_delete('song', t['file'], 'rating')
                 else:
@@ -175,15 +213,15 @@ def current_track():
         core.load_ratings_cache()
         ad = {
             'albumartist': song.get('albumartist', song.get('artist')),
-            'album':       song.get('album'),
-            'date':        song.get('date','0000')
+            'album': song.get('album'),
+            'date': song.get('date','0000')
         }
         rating = core.input_rating(f"{ad['albumartist']} - {ad['album']}",
-                                   menu_tool,
-                                   menu_prompt)
+                                     menu_tool,
+                                     menu_prompt)
         core.update_album_rating(ad, rating)
     elif action.startswith('Rate Track'):
-        val  = core.input_rating(f"{song.get('artist')} - {song.get('title')}",
+        val = core.input_rating(f"{song.get('artist')} - {song.get('title')}",
                                  menu_tool,
                                  menu_prompt)
         path = song.get('file')
@@ -193,8 +231,16 @@ def current_track():
             m.sticker_set('song', path, 'rating', val)
 
 # ── Help Text and Main ─────────────────────────────────────────────────────────
-ra = core.core_config['general']['random_artist']
-nt = core.core_config['general']['number_of_tracks']
+# Ensure core.core_config is accessible before this block,
+# which implies core module is properly set up and has this attribute.
+try:
+    ra = core.core_config['general']['random_artist']
+    nt = core.core_config['general']['number_of_tracks']
+except AttributeError:
+    print("Warning: 'core.core_config' not found. Using placeholder values for help text.", file=sys.stderr)
+    ra = "N/A"
+    nt = "N/A"
+
 help_txt = f"""
 Usage: clerk [option]
  -a  Add Albums
@@ -221,6 +267,7 @@ if __name__ == "__main__":
             case '-u': core.create_cache(m)
             case '-x':
                 print("Regenerate UI config manually.")
+                print(f"To regenerate, delete the file: {conf_path}")
             case '-h'|_: print(help_txt)
     else:
         print(help_txt)
@@ -228,4 +275,3 @@ if __name__ == "__main__":
     m.close()
     m.disconnect()
     sys.exit(0)
-
