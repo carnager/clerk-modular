@@ -1,0 +1,594 @@
+#!/usr/bin/env python3
+
+import os
+from os import environ
+import datetime
+import subprocess
+import msgpack # Needed for reading caches
+import sys # Needed for error exit
+import json # Needed to safely embed data into JS
+import time # For performance timing
+
+# --- Timestamp Helper ---
+_start_time = time.monotonic()
+
+def log_message(message, stage_start_time=None):
+    """Prints a message with a timestamp and optional stage duration."""
+    global _start_time
+    current_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3] # Time with milliseconds
+    elapsed_total = time.monotonic() - _start_time
+    
+    log_entry = f"[{current_time} | Total: {elapsed_total:>7.3f}s] {message}"
+    
+    if stage_start_time is not None:
+        elapsed_stage = time.monotonic() - stage_start_time
+        log_entry = f"[{current_time} | Stage: {elapsed_stage:>6.3f}s | Total: {elapsed_total:>7.3f}s] {message}"
+        
+    print(log_entry, file=sys.stdout) 
+    sys.stdout.flush() 
+
+# --- Configuration ---
+log_message("Script started. Initializing configuration...")
+config_start_time = time.monotonic()
+
+xdg_data_home = environ.get('XDG_DATA_HOME', os.path.join(environ.get('HOME', ''), '.local', 'share'))
+clerk_data_dir = os.path.join(xdg_data_home, 'clerk')
+album_cache_file = os.path.join(clerk_data_dir, 'album.cache')
+album_ratings_cache_file = os.path.join(clerk_data_dir, 'ratings.cache')
+
+sync_target_base = 'proteus:/srv/http/list' 
+sync_target_html = os.path.join(sync_target_base, 'index.html')
+
+log_message("Configuration initialized.", config_start_time)
+
+# --- Helper Function: Get Album Key ---
+def get_album_key(album_data):
+    try:
+        artist = album_data.get('albumartist')
+        album = album_data.get('album')
+        date = album_data.get('date')
+        artist_str = str(artist[0]) if isinstance(artist, list) else str(artist)
+        album_str = str(album[0]) if isinstance(album, list) else str(album)
+        date_str = str(date[0]) if isinstance(date, list) else str(date)
+        if not artist_str or not album_str or not date_str or artist_str == 'None' or album_str == 'None' or date_str == 'None':
+             return None
+        return f"{artist_str}|||{album_str}|||{date_str}"
+    except Exception:
+        return None
+
+# --- Load Data from Caches ---
+log_message("Loading data from caches...")
+cache_load_start_time = time.monotonic()
+
+album_list_raw = []
+try:
+    log_message(f"Attempting to load album cache from: {album_cache_file}")
+    stage_time = time.monotonic()
+    with open(album_cache_file, "rb") as inputfile:
+        mpd_msgpack = inputfile.read()
+        if not mpd_msgpack: log_message(f"Warning: Album cache file is empty: {album_cache_file}", stage_time)
+        else: album_list_raw = msgpack.unpackb(mpd_msgpack); log_message(f"Successfully loaded {len(album_list_raw)} raw albums from cache.", stage_time)
+except FileNotFoundError: log_message(f"Error: Album cache file not found at {album_cache_file}. Run 'clerk -u'.", stage_time); sys.exit(1)
+except Exception as e: log_message(f"Error reading album cache: {e}", stage_time); sys.exit(1)
+
+album_ratings = {}
+try:
+    log_message(f"Attempting to load album ratings cache from: {album_ratings_cache_file}")
+    stage_time = time.monotonic()
+    if os.path.exists(album_ratings_cache_file):
+        with open(album_ratings_cache_file, "rb") as infile:
+            packed_data = infile.read()
+            if packed_data: album_ratings = msgpack.unpackb(packed_data); log_message(f"Successfully loaded {len(album_ratings)} album ratings.", stage_time)
+            else: log_message("Album ratings cache file is empty.", stage_time)
+    else: log_message("Album ratings cache file not found.", stage_time)
+except Exception as e: log_message(f"Warning: Error loading album ratings: {e}.", stage_time); album_ratings = {}
+
+log_message("Finished loading data from caches.", cache_load_start_time)
+
+# --- Prepare Data for Embedding ---
+log_message("Preparing album data for embedding...")
+data_prep_start_time = time.monotonic()
+
+albums_data_for_embedding = []
+for album_data_raw in album_list_raw:
+    album_key = get_album_key(album_data_raw) # This key is also used as album.id in JS
+    album_rating_value = album_ratings.get(album_key, "0")
+    try:
+        album_rating_int = int(album_rating_value)
+        if not (0 <= album_rating_int <= 10): album_rating_int = 0
+    except (ValueError, TypeError): album_rating_int = 0
+
+    try:
+        date_str = str(album_data_raw.get('date', '0'))
+        year_int = int(date_str) if date_str.isdigit() else 0
+    except (ValueError, TypeError): year_int = 0
+
+    albums_data_for_embedding.append({
+        'id': album_key, 
+        'artist': album_data_raw.get('albumartist', 'Unknown Artist'),
+        'album': album_data_raw.get('album', 'Unknown Album'),
+        'year': album_data_raw.get('date', 'N/A'),
+        'year_int': year_int,
+        'rating': album_rating_int
+        # 'tracks' array removed
+    })
+
+log_message(f"Prepared {len(albums_data_for_embedding)} albums for embedding.", data_prep_start_time)
+
+log_message("Converting data to JSON format...")
+json_conversion_start_time = time.monotonic()
+try:
+    json_data = json.dumps(albums_data_for_embedding)
+except Exception as e:
+    log_message(f"Error converting data to JSON: {e}", json_conversion_start_time)
+    sys.exit(1)
+log_message("Data successfully converted to JSON.", json_conversion_start_time)
+
+
+# --- Generate HTML with Embedded JS ---
+
+temp_html_file = "/tmp/musiclist_albums_only.html" 
+log_message(f"Generating HTML file at: {temp_html_file}...")
+html_gen_start_time = time.monotonic()
+
+with open(temp_html_file, "w", encoding='utf-8') as f:
+    f.write('''<!DOCTYPE html>
+<html lang="en" class=""> <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music Library</title>
+    <script src="https://cdn.tailwindcss.com/3.4.3"></script>
+    <script>
+      tailwind.config = { darkMode: 'class' }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        try {
+            const theme = localStorage.theme;
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            if (theme === 'dark' || (!theme && prefersDark)) {
+              document.documentElement.classList.add('dark');
+            } else {
+              document.documentElement.classList.remove('dark');
+            }
+        } catch (e) {}
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        th.sortable { cursor: pointer; user-select: none; }
+        html:not(.dark) th.sortable:hover { background-color: #f0f4f8; }
+        html.dark th.sortable:hover { background-color: #374151; }
+        th .sort-icon { display: inline-block; margin-left: 5px; opacity: 0.4; width: 1em; vertical-align: middle; }
+        th.sorted-asc .sort-icon::after { content: ' ▲'; opacity: 1;}
+        th.sorted-desc .sort-icon::after { content: ' ▼'; opacity: 1;}
+        .progress-bar-text { font-size: 0.75rem; line-height: 1rem; font-weight: 600; color: #ffffff; padding: 0 0.25rem; text-shadow: 0px 0px 2px rgba(0, 0, 0, 0.7); }
+        #darkModeToggle .sun-icon, #darkModeToggle .moon-icon { display: none; }
+        html:not(.dark) #darkModeToggle .sun-icon { display: inline-block; }
+        html.dark #darkModeToggle .moon-icon { display: inline-block; }
+        .alpha-button.active { background-color: #4f46e5; color: white; }
+        html.dark .alpha-button.active { background-color: #6366f1; }
+        /* Removed styles related to .album-row.expanded and .track-row */
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200">
+<div class="container mx-auto px-4 py-8 max-w-7xl">
+
+    <div class="flex justify-between items-center mb-2">
+        <h1 class="text-3xl font-bold text-gray-700 dark:text-gray-300">Music Library</h1>
+        <button id="darkModeToggle" title="Toggle Dark Mode" class="p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-900">
+            <svg class="sun-icon h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+            <svg class="moon-icon h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+        </button>
+    </div>
+    <p class="text-sm text-gray-500 dark:text-gray-400 text-center mb-6">Generated on ''' + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '''</p>
+
+    <div id="alphabet-filter-buttons" class="mb-6 flex flex-wrap justify-center gap-1 sm:gap-2"></div>
+
+    <div class="mb-6 bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm flex flex-wrap gap-4 items-end">
+        <div class="flex-grow min-w-[200px]"> <label for="filter" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Filter:</label>
+            <input type="text" id="filter" placeholder="Artist, album, year, or rating=N..."
+                   class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+        </div>
+        <button id="clearFilter" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm">Clear</button>
+    </div>
+
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div class="table-container overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                <thead class="bg-gray-50 dark:bg-gray-700">
+                    <tr>
+                        <th scope="col" data-sort="artist" class="sortable px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                           Artist <span class="sort-icon"></span> </th>
+                        <th scope="col" data-sort="album" class="sortable px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Album <span class="sort-icon"></span>
+                        </th>
+                        <th scope="col" data-sort="year" class="sortable px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-28"> 
+                            Year <span class="sort-icon"></span>
+                        </th>
+                        <th scope="col" data-sort="rating" class="sortable px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider w-32">
+                            Rating <span class="sort-icon"></span>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody id="album-table-body" class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                    <tr><td colspan="4" class="text-center py-10 text-gray-500 dark:text-gray-400">Loading albums...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="mt-6 flex flex-col sm:flex-row justify-between items-center text-sm text-gray-600 dark:text-gray-400">
+        <div class="mb-2 sm:mb-0">
+            <span id="pagination-info">Showing 0 to 0 of 0 entries</span>
+        </div>
+        <div class="flex items-center space-x-1">
+             <label for="itemsPerPage" class="mr-2 font-medium text-gray-700 dark:text-gray-300">Per Page:</label>
+             <select id="itemsPerPage" class="border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+                 <option value="25">25</option>
+                 <option value="50" selected>50</option>
+                 <option value="100">100</option>
+                 <option value="250">250</option>
+             </select>
+            <button id="prev-page" class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
+            <span id="page-indicator" class="px-3 py-1">Page 1 of 1</span>
+            <button id="next-page" class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // console.log('[DOMContentLoaded] Initial html classes on load:', document.documentElement.className);
+
+        const allAlbums = ''' + json_data + '''; // Renamed back
+        const SYMBOL_FILTER_KEY = "#SYMBOLS#"; 
+
+        let currentPage = 1;
+        let itemsPerPage = 50;
+        let currentSortColumn = 'artist';
+        let currentSortDirection = 'asc';
+        let currentTextFilter = ''; 
+        let currentLetterFilter = null; 
+        let filteredAndSortedAlbums = [];
+        // const expandedAlbums = new Set(); // Removed
+
+        const tableBody = document.getElementById('album-table-body');
+        const filterInput = document.getElementById('filter');
+        const clearFilterButton = document.getElementById('clearFilter');
+        const prevButton = document.getElementById('prev-page');
+        const nextButton = document.getElementById('next-page');
+        const pageIndicator = document.getElementById('page-indicator');
+        const paginationInfo = document.getElementById('pagination-info');
+        const itemsPerPageSelect = document.getElementById('itemsPerPage');
+        const tableHeaders = document.querySelectorAll('th.sortable');
+        const darkModeToggle = document.getElementById('darkModeToggle');
+        const alphabetButtonsContainer = document.getElementById('alphabet-filter-buttons');
+
+        function normalizeForSearch(str) {
+            if (!str) return '';
+            return str.normalize("NFD").replace(/\\p{Diacritic}/gu, "").toUpperCase();
+        }
+
+        function generateAlphabetButtons() {
+            const availableLetters = new Set();
+            let hasSymbolChars = false;
+            allAlbums.forEach(album => { 
+                if (album.artist && album.artist.length > 0) {
+                    const firstCharNormalized = normalizeForSearch(album.artist[0]);
+                    if (firstCharNormalized) {
+                        if (firstCharNormalized >= 'A' && firstCharNormalized <= 'Z') {
+                            availableLetters.add(firstCharNormalized);
+                        } else {
+                            hasSymbolChars = true; 
+                        }
+                    }
+                }
+            });
+
+            alphabetButtonsContainer.innerHTML = ''; 
+
+            const allButton = document.createElement('button');
+            allButton.textContent = 'All';
+            allButton.className = 'alpha-button px-3 py-1 sm:px-4 sm:py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium';
+            allButton.dataset.letter = "ALL"; 
+            alphabetButtonsContainer.appendChild(allButton);
+            
+            const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split('');
+            alphabet.forEach(letter => {
+                if (availableLetters.has(letter)) {
+                    const button = document.createElement('button');
+                    button.textContent = letter;
+                    button.className = 'alpha-button px-3 py-1 sm:px-2 sm:py-1 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium';
+                    button.dataset.letter = letter;
+                    alphabetButtonsContainer.appendChild(button);
+                }
+            });
+
+            if (hasSymbolChars) {
+                const symbolButton = document.createElement('button');
+                symbolButton.textContent = '#';
+                symbolButton.className = 'alpha-button px-3 py-1 sm:px-2 sm:py-1 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium';
+                symbolButton.dataset.letter = SYMBOL_FILTER_KEY;
+                alphabetButtonsContainer.appendChild(symbolButton);
+            }
+            
+            alphabetButtonsContainer.querySelectorAll('.alpha-button').forEach(button => {
+                button.addEventListener('click', () => handleAlphabetFilterClick(button.dataset.letter));
+            });
+            updateAlphabetButtonStyles(); 
+        }
+        
+        function updateAlphabetButtonStyles() {
+            const buttons = alphabetButtonsContainer.querySelectorAll('.alpha-button');
+            buttons.forEach(button => {
+                button.classList.remove('active');
+                const buttonLetter = button.dataset.letter;
+                if ((currentLetterFilter === null && buttonLetter === "ALL") || (buttonLetter === currentLetterFilter)) {
+                    button.classList.add('active');
+                }
+            });
+        }
+
+        function handleAlphabetFilterClick(letterOrKey) {
+            if (letterOrKey === "ALL") {
+                currentLetterFilter = null;
+            } else if (currentLetterFilter === letterOrKey) { 
+                currentLetterFilter = null; 
+            } else {
+                currentLetterFilter = letterOrKey;
+            }
+            // expandedAlbums.clear(); // No longer needed
+            updateAlphabetButtonStyles();
+            applyFilterAndSort();
+        }
+
+
+        function getRatingColor(rating) {
+            if (rating === 0) return 'bg-gray-400 dark:bg-gray-600';
+            if (rating < 4) return 'bg-red-500 dark:bg-red-600';
+            if (rating < 7) return 'bg-yellow-500 dark:bg-yellow-600';
+            return 'bg-green-500 dark:bg-green-600';
+        }
+
+        function applyFilterAndSort() {
+            let ratingFilterValue = -1; 
+            const rawFilterTerms = currentTextFilter.toLowerCase().split(' ').filter(term => term.length > 0);
+            const textSearchTerms = [];
+
+            rawFilterTerms.forEach(term => {
+                if (term.startsWith("rating=") && term.length > "rating=".length) {
+                    const numStr = term.substring("rating=".length);
+                    if (/^\\d{1,2}$/.test(numStr)) { 
+                        const num = parseInt(numStr, 10);
+                        if (num >= 0 && num <= 10) { 
+                            ratingFilterValue = num;
+                        } else { textSearchTerms.push(term); }
+                    } else { textSearchTerms.push(term); }
+                } else { textSearchTerms.push(term); }
+            });
+
+            let processedAlbums = [...allAlbums]; 
+
+            if (currentLetterFilter) {
+                if (currentLetterFilter === SYMBOL_FILTER_KEY) {
+                    processedAlbums = processedAlbums.filter(album => {
+                        if (!album.artist || album.artist.length === 0) return false;
+                        const firstCharNormalized = normalizeForSearch(album.artist[0]);
+                        return !(firstCharNormalized >= 'A' && firstCharNormalized <= 'Z');
+                    });
+                } else { 
+                    processedAlbums = processedAlbums.filter(album => {
+                        if (!album.artist || album.artist.length === 0) return false;
+                        const firstCharNormalized = normalizeForSearch(album.artist[0]);
+                        return firstCharNormalized === currentLetterFilter;
+                    });
+                }
+            }
+            
+            if (ratingFilterValue !== -1) {
+                processedAlbums = processedAlbums.filter(album => album.rating === ratingFilterValue);
+            }
+
+            if (textSearchTerms.length > 0) {
+                processedAlbums = processedAlbums.filter(album => {
+                    const searchableText = `${album.artist} ${album.album} ${album.year}`.toLowerCase();
+                    return textSearchTerms.every(term => searchableText.includes(term));
+                });
+            }
+
+            processedAlbums.sort((a, b) => {
+                let valA, valB;
+                switch (currentSortColumn) {
+                    case 'artist': valA = normalizeForSearch(a.artist); valB = normalizeForSearch(b.artist); break;
+                    case 'album': valA = normalizeForSearch(a.album); valB = normalizeForSearch(b.album); break;
+                    case 'year': valA = a.year_int; valB = b.year_int; break;
+                    case 'rating': valA = a.rating; valB = b.rating; break;
+                    default: return 0;
+                }
+                let comparison = 0;
+                if (valA > valB) { comparison = 1; }
+                else if (valA < valB) { comparison = -1; }
+                return currentSortDirection === 'desc' ? (comparison * -1) : comparison;
+            });
+
+            filteredAndSortedAlbums = processedAlbums;
+            currentPage = 1;
+            updateTable();
+            updatePaginationControls();
+        }
+        
+        // Removed toggleAlbumTracks function
+
+        function updateTable() {
+            tableBody.innerHTML = '';
+            if (filteredAndSortedAlbums.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="4" class="text-center py-10 text-gray-500 dark:text-gray-400">No albums match your criteria.</td></tr>';
+                return;
+            }
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const pageAlbums = filteredAndSortedAlbums.slice(startIndex, endIndex);
+            const fragment = document.createDocumentFragment();
+            pageAlbums.forEach(album => {
+                const row = document.createElement('tr');
+                // row.className = 'album-row hover:bg-gray-50 dark:hover:bg-gray-700'; // Removed album-row class
+                row.classList.add('hover:bg-gray-50', 'dark:hover:bg-gray-700');
+                // row.dataset.albumId = album.id; // No longer needed for click
+
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
+                        ${album.artist} </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">${album.album}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">${album.year}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
+                        <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-4 overflow-hidden relative align-middle">
+                            <div class="${getRatingColor(album.rating)} h-4 rounded-full" style="width: ${album.rating * 10}%"></div>
+                            ${album.rating > 0 ? `<span class="absolute inset-0 flex items-center justify-center progress-bar-text">${album.rating}/10</span>` : ''}
+                        </div>
+                    </td>
+                `;
+                // row.addEventListener('click', () => toggleAlbumTracks(album.id, row)); // Removed click listener
+                fragment.appendChild(row);
+
+                // Track rendering logic removed
+            });
+            tableBody.appendChild(fragment);
+        }
+
+        function updatePaginationControls() {
+            const totalItems = filteredAndSortedAlbums.length;
+            const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+            pageIndicator.textContent = `Page ${currentPage} of ${totalPages}`;
+            const startItem = totalItems === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
+            const endItem = Math.min(currentPage * itemsPerPage, totalItems);
+            paginationInfo.textContent = `Showing ${startItem} to ${endItem} of ${totalItems} entries`;
+            prevButton.disabled = currentPage === 1;
+            nextButton.disabled = currentPage === totalPages;
+        }
+
+        function updateSortIndicators() {
+             tableHeaders.forEach(header => {
+                 const sortKey = header.getAttribute('data-sort');
+                 header.classList.remove('sorted-asc', 'sorted-desc');
+                 const iconSpan = header.querySelector('.sort-icon');
+                 if(iconSpan) iconSpan.innerHTML = '';
+                 if (sortKey === currentSortColumn) {
+                     header.classList.add(currentSortDirection === 'asc' ? 'sorted-asc' : 'sorted-desc');
+                 }
+             });
+         }
+
+        // --- Event Listeners ---
+        let filterTimeout;
+        filterInput.addEventListener('input', () => {
+            clearTimeout(filterTimeout);
+            filterTimeout = setTimeout(() => {
+                currentTextFilter = filterInput.value;
+                applyFilterAndSort();
+            }, 300);
+        });
+
+        clearFilterButton.addEventListener('click', () => {
+            filterInput.value = '';
+            currentTextFilter = '';
+            currentLetterFilter = null; 
+            // expandedAlbums.clear(); // Removed
+            updateAlphabetButtonStyles(); 
+            applyFilterAndSort();
+        });
+
+        prevButton.addEventListener('click', () => {
+            if (currentPage > 1) { currentPage--; updateTable(); updatePaginationControls(); window.scrollTo(0, 0); }
+        });
+        nextButton.addEventListener('click', () => {
+            const totalPages = Math.ceil(filteredAndSortedAlbums.length / itemsPerPage);
+            if (currentPage < totalPages) { currentPage++; updateTable(); updatePaginationControls(); window.scrollTo(0, 0); }
+        });
+        itemsPerPageSelect.addEventListener('change', (e) => {
+             itemsPerPage = parseInt(e.target.value, 10); currentPage = 1; 
+             // expandedAlbums.clear(); // Removed
+             updateTable(); updatePaginationControls();
+         });
+        tableHeaders.forEach(header => {
+            header.addEventListener('click', () => {
+                const sortKey = header.getAttribute('data-sort');
+                if (!sortKey) return;
+                if (currentSortColumn === sortKey) {
+                    currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSortColumn = sortKey; currentSortDirection = 'asc';
+                }
+                // expandedAlbums.clear(); // Removed
+                applyFilterAndSort(); updateSortIndicators();
+            });
+        });
+        if (darkModeToggle) {
+            darkModeToggle.addEventListener('click', () => {
+                const isDarkMode = document.documentElement.classList.toggle('dark');
+                try { localStorage.theme = isDarkMode ? 'dark' : 'light'; } 
+                catch (e) { console.error('[Dark Mode Toggle] Error saving theme to localStorage:', e); }
+            });
+        } else { console.error('[DOMContentLoaded] Dark mode toggle button not found!'); }
+
+        // --- Initial Load ---
+        try {
+            itemsPerPage = parseInt(itemsPerPageSelect.value, 10);
+            generateAlphabetButtons(); 
+            applyFilterAndSort(); 
+            updateSortIndicators();
+        } catch(e) {
+            console.error("[Initial Load] Error during setup:", e);
+            tableBody.innerHTML = '<tr><td colspan="4" class="text-center py-10 text-red-500">An error occurred.</td></tr>';
+        }
+    });
+</script>
+
+</body>
+</html>
+''') # End of HTML content writing
+
+log_message("HTML generation complete.", html_gen_start_time)
+
+# --- Sync and Cleanup ---
+log_message("Attempting to sync files...")
+sync_start_time = time.monotonic()
+sync_error = False
+try:
+    # Sync HTML
+    html_sync_cmd = ['scp', temp_html_file, sync_target_html]
+    log_message(f"Running: {' '.join(html_sync_cmd)}")
+    process_html = subprocess.Popen(html_sync_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout_html, stderr_html = process_html.communicate()
+    if process_html.returncode != 0:
+        log_message(f"Error syncing HTML: {stderr_html.decode(errors='replace')}", file=sys.stderr)
+        sync_error = True
+    else:
+        log_message("HTML sync successful.")
+except Exception as e:
+    log_message(f"An error occurred during the sync process: {e}", file=sys.stderr)
+    sync_error = True
+finally:
+    # Cleanup temp file
+    cleanup_start_time = time.monotonic()
+    try:
+        log_message(f"Removing temporary file: {temp_html_file}")
+        if os.path.exists(temp_html_file):
+             rm_result = subprocess.run(['rm', temp_html_file], capture_output=True, text=True, check=False) 
+             if rm_result.returncode != 0:
+                  log_message(f"Warning: Failed to remove temporary file {temp_html_file}: {rm_result.stderr}", file=sys.stderr)
+        log_message("Temporary file cleanup finished.", cleanup_start_time)
+    except Exception as e:
+        log_message(f"Error removing temporary file {temp_html_file}: {e}", file=sys.stderr)
+
+log_message("File sync and cleanup finished.", sync_start_time)
+
+if sync_error:
+     log_message("Script finished with sync errors.", file=sys.stderr)
+     sys.exit(1)
+else:
+     log_message("Script finished successfully.")
+     sys.exit(0)
+

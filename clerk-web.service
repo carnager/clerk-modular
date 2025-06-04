@@ -1,0 +1,15 @@
+[Unit]
+Description=Clerk Flask Web Service
+After=network.target
+
+[Service]
+Type=simple
+# Runs as the invoking user
+ExecStart=/usr/bin/clerk-service
+Restart=on-failure
+# Optional: set any env vars
+Environment=FLASK_ENV=production
+
+[Install]
+WantedBy=default.target
+
