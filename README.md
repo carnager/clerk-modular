@@ -9,8 +9,7 @@ It consists of:
 
 ## Installation
 
-```bash
-pip install clerk-music-manager
+to be considered...
 
 ## Configuration
 The core module and clerk-rofi tool expect a configuration files at ~/.config/clerk/clerk-core.conf and ~/.config/clerk/clerk/clerk-rofi.conf.
