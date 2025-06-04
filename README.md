@@ -12,7 +12,7 @@ It consists of:
 to be considered...
 
 ## Configuration
-The core module and clerk-rofi tool expect a configuration files at ~/.config/clerk/clerk-core.conf and ~/.config/clerk/clerk/clerk-rofi.conf.
+The core module and clerk-rofi tool expect configuration files at ~/.config/clerk/clerk-core.conf and ~/.config/clerk/clerk/clerk-rofi.conf.
 A default configuration will be generated if it doesn't exist.
 
 Usage
