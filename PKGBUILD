@@ -1,4 +1,4 @@
-# Maintainer: Your Name <you@example.com>
+# Maintainer: Rasmus Steinke <rasi at xssn dot at>
 pkgname=('clerk-core' 'clerk-rofi' 'clerk-web')
 pkgver=1.0
 pkgrel=1
