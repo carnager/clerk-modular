@@ -17,6 +17,13 @@ A default configuration will be generated if it doesn't exist.
 
 ## Usage
 
+### clerk_core
+
+is used as a module by the other scripts
+
+#### Environment variables:
+- MPD_HOST
+
 ### clerk-rofi
 
 - **`clerk-rofi -h`**: Show help
