@@ -426,13 +426,6 @@ def create_cache(mpd_client):
             reverse=True # Sort in descending order for latest first
         )
         
-        # Diagnostic print for 'latest' album sorting
-        if latest_unique_albums:
-            print("Core Info: First 5 'latest' albums (after sort):")
-            for j, album_data in enumerate(latest_unique_albums[:5]):
-                lm_time = album_data.get('last-modified', 'N/A')
-                print(f"  {j+1}. {album_data['albumartist']} - {album_data['album']} ({lm_time})")
-
         # Assign IDs to the sorted 'latest_unique_albums' list
         for i, album_data in enumerate(latest_unique_albums):
             album_data['id'] = str(i)
