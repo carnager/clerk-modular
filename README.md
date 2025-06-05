@@ -3,8 +3,9 @@
 Clerk is a little application to quickly add albums or tracks to your mpd playback queue.
 It consists of:
 - **`clerk_core`**: a core module to handle all functionality.
-- **`clerk-rofi`**: an example UI utilizing rofi
+- **`clerk-rofi`**: an example UI utilizing rofi using clerk_core directly
 - **`clerk-service`**: a service that serves a REST API plus an example webpage.
+- **`clerk-api-rofi`**: an example UI utilizing rofi using the REST API of clerk-service
 - **`clerk-musiclist`**: a little script that creates a searchable webpage, which uses clerk's cache files to generate album lists with album ratings.
 
 ## Installation
@@ -55,6 +56,14 @@ Run clerk-musiclist
 #### Environment variables:
 - CLERK_SYNC_HOST
 - CLERK_SYNC_PATH
+
+## Rating Limitations
+
+Originally I wanted to use MPD stickers for album ratings. While mpd supports an album type for stickers, it does not allow to combine these with a date type, which results in album ratings being applied for all albums with the same name.
+Since caches already use msgpack, I opted for the same format for ratings, to keep the code clean. This has one obvious drawback:
+Using clerk on multiple machines to rate albums will give you multiple, out of sync rating caches.
+
+This is why the clerk-api-rofi script exists. If you use the web service, you can use this to interact with it. 
 
 
 # REST API of clerk-service
