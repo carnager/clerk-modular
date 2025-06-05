@@ -165,20 +165,19 @@ def format_track_line(t):
 
 
 # ── UI Actions (Adapted for API Communication) ─────────────────────────────────
-def add_album(mode_filter): # Renamed `mode` to `mode_filter` to avoid confusion with playlist mode
-    albums = make_api_request('GET', 'albums')
-    if albums is None:
-        print("Failed to retrieve albums from API.", file=sys.stderr)
-        return
-    
-    # Filter 'latest' client-side if needed (API /albums provides all)
+def add_album(mode_filter):
+    albums = None
     if mode_filter == 'latest':
-        # This is a simplification; your core.py 'latest' cache might be ordered differently
-        # For true "latest", clerk-service.py would need a /api/v1/latest_albums endpoint.
-        albums = albums[-100:] # Example: just last 100 albums if no dedicated API.
+        albums = make_api_request('GET', 'latest_albums') # Fetch from new endpoint
+    else: # 'album' mode
+        albums = make_api_request('GET', 'albums')
+    
+    if albums is None:
+        print(f"Failed to retrieve {mode_filter} albums from API.", file=sys.stderr)
+        return
 
     if not albums:
-        print("No albums available.", file=sys.stderr)
+        print(f"No {mode_filter} albums available.", file=sys.stderr)
         return
 
     lines = [format_album_line(a) for a in albums]
@@ -264,19 +263,19 @@ def add_track():
 
 def random_album_ui():
     response = make_api_request('POST', 'playback/random/album')
-    if response and response.get('message'):
-        print(f"Random album initiated: {response.get('message')}")
+    if response and response.get('message'): # Check for 'message' field directly
+        print(f"Random album initiated: {response['message']}") # Print the specific message
     elif response:
-        print(f"Random album initiated: {response}") # Fallback for less specific messages
+        print(f"Random album initiated (API response: {response}).") # Fallback, more informative
     else:
         print("Failed to initiate random album playback.")
 
 def random_tracks_ui():
     response = make_api_request('POST', 'playback/random/tracks')
-    if response and response.get('message'):
-        print(f"Random tracks initiated: {response.get('message')}")
+    if response and response.get('message'): # Check for 'message' field directly
+        print(f"Random tracks initiated: {response['message']}") # Print the specific message
     elif response:
-        print(f"Random tracks initiated: {response}") # Fallback for less specific messages
+        print(f"Random tracks initiated (API response: {response}).") # Fallback, more informative
     else:
         print("Failed to initiate random tracks playback.")
 
@@ -314,10 +313,12 @@ def current_track():
             return
         
         # If API returns song details like title/artist, use them for prompt
-        # For now, current_track/rating GET only gives rating, so prompt is generic
-        prompt_text = "Current Track Rating"
-        # If the GET for /current_track/rating provided artist/title, we'd use:
-        # prompt_text = f"{current_track_info.get('artist', 'N/A')} - {current_track_info.get('title', 'N/A')}"
+        # The GET for /current_track/rating only gives rating. For prompt, we might need
+        # another API call to get current song metadata if not already part of rating endpoint.
+        # For now, a generic prompt based on available info.
+        # To get dynamic prompt, clerk-service's /api/v1/current_track/rating GET should
+        # return song metadata (artist, title, album, etc.) along with rating.
+        prompt_text = "Current Track Rating" 
 
         val = _input_rating_rofi_style(prompt_text)
 
