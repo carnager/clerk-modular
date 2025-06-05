@@ -84,28 +84,35 @@ def add_album_to_playlist(mpd_client, album_data_list, mode="add"):
         mpd_client.play()
 
 def add_track_to_playlist(mpd_client, track_data_list, mode="add"):
+    """
+    Add/insert/replace individual tracks in MPD playlist.
+    track_data_list: list of track dictionaries.
+    mode: "add", "insert", or "replace".
+    """
     if mode == "replace":
         mpd_client.clear()
     pos = None
     if mode == "insert":
         try:
             pos = int(mpd_client.currentsong().get('pos')) + 1
-        except:
+        except (TypeError, ValueError): # Handle cases where currentsong() or 'pos' is missing/invalid
             pos = None
     for track in track_data_list:
-        tracks = mpd_client.find('artist', track['artist'], 'album', track['album'])
-        for t in tracks:
-            try:
-                if pos is not None:
-                    mpd_client.addid(t['file'], pos)
-                    pos += 1
-                else:
-                    mpd_client.addid(t['file'])
-            except Exception as e:
-                print(f"Core Error: Could not add track {t.get('file')}: {e}")
+        # The key change is here: use track['file'] to add the specific track
+        track_file = track.get('file')
+        if not track_file:
+            print(f"Core Warning: Skipping track due to missing 'file' key: {track}")
+            continue
+        try:
+            if pos is not None:
+                mpd_client.addid(track_file, pos)
+                pos += 1
+            else:
+                mpd_client.addid(track_file)
+        except Exception as e:
+            print(f"Core Error: Could not add track {track_file}: {e}")
     if mode in ["replace", "insert"]:
         mpd_client.play()
-
 
 def get_album_key(album_data):
     try:
@@ -133,8 +140,6 @@ def load_ratings_cache():
     except Exception as e:
         print(f"Core Error: Failed to load ratings cache: {e}")
         album_ratings = {}
-
-
 
 def save_ratings_cache():
     try:
@@ -261,6 +266,7 @@ def get_tracks(rating_filter=None):
     return tracks
 
 # --- Cache Update Logic ---
+# --- Cache Update Logic ---
 def create_cache(mpd_client):
     print("Core Info: Creating cache...")
     try:
@@ -271,13 +277,28 @@ def create_cache(mpd_client):
             artist = song.get('albumartist') or song.get('artist')
             album = song.get('album')
             date = song.get('date', '0000')
-            if not artist or not album:
+            track_file = song.get('file') # <--- Get the file key here
+
+            if not artist or not album or not track_file: # <--- Added check for track_file
+                # You might want to print a warning here if a track is skipped
+                # print(f"Core Warning: Skipping song due to missing essential tags or file: {song}", file=sys.stderr)
                 continue
+
             key = (artist, album, date)
             if key not in seen:
                 seen.add(key)
                 albums.append({'albumartist': artist, 'album': album, 'date': date, 'id': str(len(albums))})
-            tracks.append({'track': song.get('track', ''), 'title': song.get('title', ''), 'artist': artist, 'album': album, 'date': date, 'id': str(i)})
+            
+            # --- IMPORTANT FIX HERE: Add 'file': track_file ---
+            tracks.append({
+                'track': song.get('track', ''),
+                'title': song.get('title', ''),
+                'artist': artist,
+                'album': album,
+                'date': date,
+                'file': track_file, # <--- This was missing!
+                'id': str(i)
+            })
             latest.append({'albumartist': artist, 'album': album, 'date': date, 'id': str(len(latest))})
         with open(ALBUM_CACHE_FILE, "wb") as f:
             f.write(msgpack.packb(albums))
