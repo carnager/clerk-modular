@@ -10,10 +10,7 @@ from werkzeug.exceptions import UnsupportedMediaType
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-PUBLIC_DIR = os.environ.get('CLERK_WEB_PUBLIC_DIR', "/usr/share/clerk-web")
-APP_PORT = int(os.environ.get('CLERK_WEB_PORT', 5000))
-APP_HOST = os.environ.get('CLERK_WEB_HOST', '0.0.0.0')
-
+PUBLIC_DIR = "/usr/share/clerk-web"
 conf_path = os.path.join(
     os.environ.get('XDG_CONFIG_HOME', os.path.join(os.environ.get('HOME'),'.config')),
     'clerk', 'clerk-core.conf'
@@ -141,13 +138,30 @@ def add_album_to_playlist(album_id):
 
 @app.route('/api/v1/playlist/add/track/<track_id>', methods=['POST'])
 def add_track_to_playlist(track_id):
+    data = request.get_json() or {}
+    mode = data.get('mode', 'add') # Default to 'add' if not specified
+
+    if mode not in ['add', 'insert', 'replace']:
+        logger.warning(f"Invalid mode '{mode}' received for track addition.")
+        return jsonify({"error": "Invalid mode. Must be 'add', 'insert', or 'replace'."}), 400
+
     tracks = core.read_tracks_cache()
-    t = next((x for x in tracks if x['id']==track_id), None)
+    t = next((x for x in tracks if x['id'] == track_id), None)
     if not t:
-        return jsonify({"error":"Track not found"}), 404
-    connect_mpd()
-    core.add_track_to_playlist(mpd, [t], mode='add')
-    return jsonify({"message":"Track added"}), 200
+        logger.warning(f"Track with ID '{track_id}' not found in cache.")
+        return jsonify({"error": "Track not found"}), 404
+
+    connect_mpd() # Ensure MPD is connected
+
+    try:
+        # Pass the dynamic mode to the core function
+        core.add_track_to_playlist(mpd, [t], mode=mode)
+        logger.info(f"Track '{t.get('title', 'N/A')}' (ID: {track_id}) added to playlist in mode: {mode}.")
+        return jsonify({"message": f"Track added to playlist successfully in '{mode}' mode."}), 200
+    except Exception as e:
+        logger.error(f"Failed to add track '{t.get('title', 'N/A')}' (ID: {track_id}) to playlist: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Failed to add track to playlist: {str(e)}"}), 500
+
 
 @app.route('/api/v1/playback/random/album', methods=['POST'])
 def play_random_album():
@@ -249,5 +263,5 @@ def set_current_album_rating():
 
 # ── Run Application ────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    app.run(host=APP_HOST, port=APP_PORT)
+    app.run(host='0.0.0.0', port=5000)
 
