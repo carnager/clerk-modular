@@ -166,27 +166,10 @@ def format_track_line(t):
 
 # ── UI Actions (Adapted for API Communication) ─────────────────────────────────
 def add_album(mode_filter):
-    albums = None
-    if mode_filter == 'latest':
-        albums = make_api_request('GET', 'latest_albums') # Fetch from new endpoint
-    else: # 'album' mode
-        albums = make_api_request('GET', 'albums')
-    
-    if albums is None:
-        print(f"Failed to retrieve {mode_filter} albums from API.", file=sys.stderr)
-        return
-
-    if not albums:
-        print(f"No {mode_filter} albums available.", file=sys.stderr)
-        return
-
-    lines = [format_album_line(a) for a in albums]
-    selected_ids = _menu(lines, trim='yes')
-    if not selected_ids:
-        return
+    # ... (existing code to fetch albums and get selected_ids) ...
 
     action_options = ['Add','Insert','Replace','Rate']
-    action = _menu(action_options, trim='no') # No 'prompt' arg here as per _menu definition
+    action = _menu(action_options, trim='no')
     if action not in action_options:
         return
 
@@ -194,9 +177,10 @@ def add_album(mode_filter):
         for a in albums:
             if a['id'] in selected_ids:
                 prompt = f"{a.get('albumartist', 'N/A')} - {a.get('album', 'N/A')}"
-                val = _input_rating_rofi_style(prompt) # Using a new helper function for rating input
+                val = _input_rating_rofi_style(prompt)
 
-                # Send rating update via API
+                # Send rating update via API - this part is ALREADY correct because it uses album['id']
+                # which came from the 'albums' list (either 'album' or 'latest') that was fetched.
                 response = make_api_request('POST', f'albums/{a["id"]}/rating', json_data={'rating': val})
                 if response and response.get('changed'):
                     print(f"Rated '{prompt}' as {val}.")
@@ -208,7 +192,9 @@ def add_album(mode_filter):
 
     # Add/Insert/Replace to playlist via API
     for album_id in selected_ids:
-        response = make_api_request('POST', f'playlist/add/album/{album_id}', json_data={'mode': action.lower()})
+        # Pass the original mode_filter as 'list_mode' to the API
+        payload = {'mode': action.lower(), 'list_mode': mode_filter} # <<< CHANGED HERE!
+        response = make_api_request('POST', f'playlist/add/album/{album_id}', json_data=payload)
         if response and response.get('message'):
             print(f"Album ID {album_id} added to playlist ({action.lower()}).")
         else:
