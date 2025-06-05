@@ -10,13 +10,13 @@ import json     # New: For handling JSON data
 # --- Configuration File Handling ------------------------------------------------
 xdg_config = os.environ.get('XDG_CONFIG_HOME', os.path.join(os.environ.get('HOME', ''), '.config'))
 conf_dir = os.path.join(xdg_config, 'clerk')
-conf_path = os.path.join(conf_dir, 'clerk-rofi-api.conf') # New config file name
+conf_path = os.path.join(conf_dir, 'clerk-api-rofi.conf') # New config file name
 
 # Default configuration values for the API client
 DEFAULT_CONFIG = {
     'general': {
         'menu_prompt': 'Clerk-API',
-        'menu_tool': ['rofi', '-dmenu', '-p', 'PLACEHOLDER'],
+        'menu_tool': ['rofi', '-dmenu', '-i', '-p', 'PLACEHOLDER'],
         'api_base_url': 'http://localhost:5000/api/v1' # New: Base URL for your Flask API
     },
     'columns': {
