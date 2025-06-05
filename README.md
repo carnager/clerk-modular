@@ -16,8 +16,10 @@ It consists of:
 ### Others:
 Note for packagers: clerk-rofi and clerk-service expect the clerk_core.py file to be in the same directory or in site-packages/ folder of your python distribution
 
-## Configuration
-The core module and clerk-rofi tool expect configuration files at ~/.config/clerk/clerk-core.conf and ~/.config/clerk/clerk/clerk-rofi.conf.
+## Configuration Files
+- **`clerk_core`**: ~/.config/clerk/clerk-core.conf
+- **`clerk-rofi`**: ~/.config/clerk/clerk/clerk-rofi.conf
+- **`clerk-api-rofi`**: ~/.config/clerk/clerk-api-rofi.conf
 A default configuration will be generated if it doesn't exist.
 
 ## Usage
