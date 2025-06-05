@@ -84,6 +84,17 @@ def list_albums():
         out.append(entry)
     return jsonify(out), 200
 
+@app.route('/api/v1/latest_albums', methods=['GET']) # New Endpoint for latest albums
+def list_latest_albums():
+    albums = core.read_album_cache("latest")
+    core.load_ratings_cache()
+    out = []
+    for a in albums:
+        entry = a.copy()
+        entry['rating'] = core.album_ratings.get(core.get_album_key(a))
+        out.append(entry)
+    return jsonify(out), 200
+
 @app.route('/api/v1/tracks', methods=['GET'])
 def list_tracks():
     tracks = core.read_tracks_cache()
