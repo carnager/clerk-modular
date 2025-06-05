@@ -307,8 +307,8 @@ def create_cache(mpd_client):
     """
     print("Core Info: Creating cache using batched search with window parameter...")
     
-    all_songs_collected = [] # To collect all songs before final processing
-
+    all_songs_collected_raw = [] # To collect all songs in original MPD order
+    
     batch_size = core_config['general'].get('cache_batch_size', 10000)
 
     try:
@@ -337,7 +337,7 @@ def create_cache(mpd_client):
                 if not batch_songs:
                     break
 
-                all_songs_collected.extend(batch_songs)
+                all_songs_collected_raw.extend(batch_songs) # Collect all songs in their raw MPD order
                 
                 offset += len(batch_songs)
                 print(f"Core Info: Fetched {offset}/{total_songs} songs...")
@@ -352,15 +352,14 @@ def create_cache(mpd_client):
         # --- Process all collected songs after fetching is complete ---
         albums = []
         tracks = []
-        # Temporary list to store albums for the 'latest' cache, in their original encounter order
-        temp_latest_albums_for_sorting = [] 
+        # Dictionary to store album data with its LATEST 'last-modified' timestamp for 'latest' sorting
+        temp_latest_albums_with_timestamps = {} 
         
         seen_albums_for_main_list = set() # For 'albums' list deduplication
-
         track_id_counter = 0
 
-        # First pass: populate main albums and tracks list in original MPD scan order
-        for song in all_songs_collected:
+        # Pass 1: Populate 'albums' and 'tracks' lists in original MPD-returned order
+        for song in all_songs_collected_raw: # Iterate through songs in their original order
             album_artist_for_key = song.get('albumartist')
             if not album_artist_for_key:
                 album_artist_for_key = song.get('artist')
@@ -368,13 +367,14 @@ def create_cache(mpd_client):
             album_name = song.get('album')
             album_date = song.get('date', '0000')
             track_file = song.get('file')
+            last_modified_time = song.get('last-modified') # Get last-modified for this track
 
             if not album_artist_for_key or not album_name or not album_date or not track_file:
                 continue
 
             album_key_tuple = (album_artist_for_key, album_name, album_date)
             
-            # Populate the 'albums' list (all unique albums, in initial MPD order)
+            # Populate the 'albums' list (all unique albums)
             if album_key_tuple not in seen_albums_for_main_list:
                 seen_albums_for_main_list.add(album_key_tuple)
                 albums.append({
@@ -396,32 +396,48 @@ def create_cache(mpd_client):
             })
             track_id_counter += 1
 
-            # Also add to temporary list for 'latest' sorting
-            temp_latest_albums_for_sorting.append({
-                'albumartist': album_artist_for_key,
-                'album': album_name,
-                'date': album_date,
-                'last-modified': song.get('last-modified', '1970-01-01T00:00:00Z') # Capture last-modified
-            })
-
-        # --- Second pass: Deduplicate and sort for the 'latest' list ---
-        latest_unique_albums = []
-        seen_albums_for_latest_list = set()
-
-        # Sort the temporary list by 'last-modified' in descending order
-        temp_latest_albums_for_sorting.sort(key=lambda a: a.get('last-modified', '1970-01-01T00:00:00Z'), reverse=True)
-
-        for album_data in temp_latest_albums_for_sorting:
-            album_key_tuple = (album_data['albumartist'], album_data['album'], album_data['date'])
-            if album_key_tuple not in seen_albums_for_latest_list:
-                seen_albums_for_latest_list.add(album_key_tuple)
-                latest_unique_albums.append({
-                    'albumartist': album_data['albumartist'],
-                    'album': album_data['album'],
-                    'date': album_data['date'],
-                    'id': str(len(latest_unique_albums)) # Unique ID for this list
-                })
+            # Update the 'latest' albums map with the *latest* 'last-modified' for each album
+            existing_entry = temp_latest_albums_with_timestamps.get(album_key_tuple)
+            if not existing_entry or (last_modified_time and last_modified_time > existing_entry['last-modified']):
+                temp_latest_albums_with_timestamps[album_key_tuple] = {
+                    'albumartist': album_artist_for_key,
+                    'album': album_name,
+                    'date': album_date,
+                    'last-modified': last_modified_time
+                }
         
+        # --- Sort the 'albums' list for -a option: by AlbumArtist, then Date, then Album ---
+        albums.sort(key=lambda a: (
+            a.get('albumartist', '').lower(), # Sort by album artist (case-insensitive)
+            a.get('date', '0000'),           # Then by date (ascending)
+            a.get('album', '').lower()       # Then by album name (case-insensitive)
+        ))
+        # Re-assign IDs after sorting for the main albums list
+        for i, album_data in enumerate(albums):
+            album_data['id'] = str(i)
+
+        # Pass 2: Convert dictionary to list, deduplicate (already done by dict), and sort for 'latest'
+        latest_unique_albums = list(temp_latest_albums_with_timestamps.values())
+
+        print(f"Core Info: Sorting 'latest' albums by 'last-modified' (descending).")
+        # Sort the 'latest_unique_albums' list by 'last-modified' in descending order
+        latest_unique_albums.sort(
+            key=lambda a: a.get('last-modified', '1970-01-01T00:00:00Z'), # Use fallback for safety
+            reverse=True # Sort in descending order for latest first
+        )
+        
+        # Diagnostic print for 'latest' album sorting
+        if latest_unique_albums:
+            print("Core Info: First 5 'latest' albums (after sort):")
+            for j, album_data in enumerate(latest_unique_albums[:5]):
+                lm_time = album_data.get('last-modified', 'N/A')
+                print(f"  {j+1}. {album_data['albumartist']} - {album_data['album']} ({lm_time})")
+
+        # Assign IDs to the sorted 'latest_unique_albums' list
+        for i, album_data in enumerate(latest_unique_albums):
+            album_data['id'] = str(i)
+
+
         # Write data to cache files
         with open(ALBUM_CACHE_FILE, "wb") as f:
             f.write(msgpack.packb(albums))
