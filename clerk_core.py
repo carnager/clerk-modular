@@ -33,6 +33,7 @@ def create_core_config():
 [general]
 mpd_host = "localhost"
 number_of_tracks = 20
+cache_batch_size = 10000
 random_artist = "albumartist"
 sync_online_list = true
 sync_command = ["/path/to/your/modified/musiclist.py"]
