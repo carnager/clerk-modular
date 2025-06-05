@@ -299,51 +299,105 @@ def get_tracks(rating_filter=None):
         return filtered
     return tracks
 
-# --- Cache Update Logic ---
-# --- Cache Update Logic ---
 def create_cache(mpd_client):
-    print("Core Info: Creating cache...")
+    """
+    Creates the album, tracks, and latest caches by fetching data from MPD
+    in batches using the 'search' command with the 'window' parameter.
+    """
+    print("Core Info: Creating cache using batched search with window parameter...")
+    albums, tracks, latest = [], [], []
+    seen_albums = set()
+    track_id_counter = 0
+
+    batch_size = core_config['general'].get('cache_batch_size', 20000) # Get batch size from config
+
     try:
-        songs = mpd_client.listallinfo()
-        albums, tracks, latest = [], [], []
-        seen = set()
-        for i, song in enumerate(songs):
-            artist = song.get('albumartist') or song.get('artist')
-            album = song.get('album')
-            date = song.get('date', '0000')
-            track_file = song.get('file') # <--- Get the file key here
+        # Get the total number of songs in the MPD database for iteration
+        # --- FIX: Changed to mpd_client.stats() instead of .status() ---
+        stats = mpd_client.stats()
+        total_songs = int(stats.get('songs', 0))
+        
+        if total_songs == 0:
+            print("Core Warning: No songs found in MPD database. Cache will be empty.")
+            # Proceed to save empty caches
+            with open(ALBUM_CACHE_FILE, "wb") as f: f.write(msgpack.packb(albums))
+            with open(TRACKS_CACHE_FILE, "wb") as f: f.write(msgpack.packb(tracks))
+            with open(LATEST_CACHE_FILE, "wb") as f: f.write(msgpack.packb(latest))
+            print("Core Info: Cache created (empty due to no songs).")
+            return True
 
-            if not artist or not album or not track_file: # <--- Added check for track_file
-                # You might want to print a warning here if a track is skipped
-                # print(f"Core Warning: Skipping song due to missing essential tags or file: {song}", file=sys.stderr)
-                continue
+        offset = 0
+        while offset < total_songs:
+            try:
+                start_index = offset + 1 # MPD window is 1-indexed for start
+                end_index = offset + batch_size # MPD window end is exclusive, so it's start + count
 
-            key = (artist, album, date)
-            if key not in seen:
-                seen.add(key)
-                albums.append({'albumartist': artist, 'album': album, 'date': date, 'id': str(len(albums))})
-            
-            # --- IMPORTANT FIX HERE: Add 'file': track_file ---
-            tracks.append({
-                'track': song.get('track', ''),
-                'title': song.get('title', ''),
-                'artist': artist,
-                'album': album,
-                'date': date,
-                'file': track_file, # <--- This was missing!
-                'id': str(i)
-            })
-            latest.append({'albumartist': artist, 'album': album, 'date': date, 'id': str(len(latest))})
+                # Format the window string as "start:end"
+                window_str = f"{start_index}:{end_index}"
+
+                # --- Using the user's specified syntax for 'window' parameter ---
+                batch_songs = mpd_client.search('filename', '', 'window', window_str)
+                
+                if not batch_songs: # No more songs in this batch, or end of database
+                    break
+
+                for song in batch_songs:
+                    artist = song.get('albumartist') or song.get('artist')
+                    album = song.get('album')
+                    date = song.get('date', '0000')
+                    track_file = song.get('file')
+
+                    if not artist or not album or not track_file:
+                        # print(f"Core Warning: Skipping song due to missing essential tags or file: {song.get('file', 'N/A')}")
+                        continue
+
+                    album_key_tuple = (artist, album, date)
+                    if album_key_tuple not in seen_albums:
+                        seen_albums.add(album_key_tuple)
+                        albums.append({
+                            'albumartist': artist,
+                            'album': album,
+                            'date': date,
+                            'id': str(len(albums)) # Unique ID for albums
+                        })
+                    
+                    tracks.append({
+                        'track': song.get('track', ''),
+                        'title': song.get('title', ''),
+                        'artist': artist,
+                        'album': album,
+                        'date': date,
+                        'file': track_file,
+                        'id': str(track_id_counter) # Unique ID for each track
+                    })
+                    track_id_counter += 1
+
+                    latest.append({'albumartist': artist, 'album': album, 'date': date, 'id': str(len(latest))})
+
+                offset += len(batch_songs) # Advance offset by the number of songs actually retrieved in this batch
+                print(f"Core Info: Processed {offset}/{total_songs} songs...")
+
+            except MPDError as mpd_e:
+                print(f"Core Error: MPD error during batch search (offset {offset}): {mpd_e}", file=sys.stderr)
+                break # Break if an MPD error occurs during batch fetching
+            except Exception as e:
+                print(f"Core Error: Unexpected error processing batch (offset {offset}): {e}", file=sys.stderr)
+                break # Break if other error occurs
+
+        # Write data to cache files
         with open(ALBUM_CACHE_FILE, "wb") as f:
             f.write(msgpack.packb(albums))
         with open(TRACKS_CACHE_FILE, "wb") as f:
             f.write(msgpack.packb(tracks))
         with open(LATEST_CACHE_FILE, "wb") as f:
             f.write(msgpack.packb(latest))
-        print("Core Info: Cache created successfully.")
+        print(f"Core Info: Cache created successfully. Total tracks processed: {len(tracks)}.")
         return True
+    except MPDError as mpd_e:
+        print(f"Core Error: MPD error getting status or listing artists: {mpd_e}", file=sys.stderr)
+        return False
     except Exception as e:
-        print(f"Core Error: Cache creation failed: {e}")
+        print(f"Core Error: Cache creation failed: {e}", file=sys.stderr)
         return False
 
 def check_update(mpd_client):
