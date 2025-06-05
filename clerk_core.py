@@ -305,24 +305,27 @@ def create_cache(mpd_client):
     in batches using the 'search' command with the 'window' parameter.
     """
     print("Core Info: Creating cache using batched search with window parameter...")
-    albums, tracks, latest = [], [], []
-    seen_albums = set()
+    albums = [] # List to store unique album dictionaries for main album.cache
+    tracks = [] # List to store track dictionaries (one per song)
+    temp_latest_albums_ordered_with_duplicates = [] # Temporary list to collect album data for 'latest', including duplicates initially
+    
+    seen_albums = set() # Set to track unique album keys for the 'albums' list
+
     track_id_counter = 0
 
-    batch_size = core_config['general'].get('cache_batch_size', 20000) # Get batch size from config
+    batch_size = core_config['general'].get('cache_batch_size', 10000)
 
     try:
         # Get the total number of songs in the MPD database for iteration
-        # --- FIX: Changed to mpd_client.stats() instead of .status() ---
         stats = mpd_client.stats()
         total_songs = int(stats.get('songs', 0))
         
         if total_songs == 0:
             print("Core Warning: No songs found in MPD database. Cache will be empty.")
-            # Proceed to save empty caches
+            # Save empty caches if no songs found
             with open(ALBUM_CACHE_FILE, "wb") as f: f.write(msgpack.packb(albums))
             with open(TRACKS_CACHE_FILE, "wb") as f: f.write(msgpack.packb(tracks))
-            with open(LATEST_CACHE_FILE, "wb") as f: f.write(msgpack.packb(latest))
+            with open(LATEST_CACHE_FILE, "wb") as f: f.write(msgpack.packb([])) # Save empty list for latest
             print("Core Info: Cache created (empty due to no songs).")
             return True
 
@@ -332,57 +335,87 @@ def create_cache(mpd_client):
                 start_index = offset + 1 # MPD window is 1-indexed for start
                 end_index = offset + batch_size # MPD window end is exclusive, so it's start + count
 
-                # Format the window string as "start:end"
                 window_str = f"{start_index}:{end_index}"
 
-                # --- Using the user's specified syntax for 'window' parameter ---
                 batch_songs = mpd_client.search('filename', '', 'window', window_str)
                 
                 if not batch_songs: # No more songs in this batch, or end of database
                     break
 
                 for song in batch_songs:
-                    artist = song.get('albumartist') or song.get('artist')
-                    album = song.get('album')
-                    date = song.get('date', '0000')
+                    # Ensure consistent artist for album key generation
+                    # Use albumartist primarily, fallback to artist
+                    album_artist_for_key = song.get('albumartist')
+                    if not album_artist_for_key:
+                        album_artist_for_key = song.get('artist')
+
+                    album_name = song.get('album')
+                    album_date = song.get('date', '0000')
                     track_file = song.get('file')
 
-                    if not artist or not album or not track_file:
-                        # print(f"Core Warning: Skipping song due to missing essential tags or file: {song.get('file', 'N/A')}")
+                    # Skip if essential metadata or file path is missing
+                    if not album_artist_for_key or not album_name or not album_date or not track_file:
                         continue
 
-                    album_key_tuple = (artist, album, date)
+                    # Create a tuple key for unique album identification
+                    album_key_tuple = (album_artist_for_key, album_name, album_date)
+                    
+                    # --- Populate the 'albums' list (all unique albums) ---
                     if album_key_tuple not in seen_albums:
                         seen_albums.add(album_key_tuple)
                         albums.append({
-                            'albumartist': artist,
-                            'album': album,
-                            'date': date,
-                            'id': str(len(albums)) # Unique ID for albums
+                            'albumartist': album_artist_for_key,
+                            'album': album_name,
+                            'date': album_date,
+                            'id': str(len(albums)) # Unique ID for main albums list
                         })
                     
+                    # --- Populate the 'tracks' list (all individual songs) ---
                     tracks.append({
                         'track': song.get('track', ''),
                         'title': song.get('title', ''),
-                        'artist': artist,
-                        'album': album,
-                        'date': date,
+                        'artist': song.get('artist'), # Keep original artist tag for tracks
+                        'album': album_name,
+                        'date': album_date,
                         'file': track_file,
                         'id': str(track_id_counter) # Unique ID for each track
                     })
                     track_id_counter += 1
 
-                    latest.append({'albumartist': artist, 'album': album, 'date': date, 'id': str(len(latest))})
+                    # --- Populate the temporary list for 'latest' (may contain duplicates initially) ---
+                    temp_latest_albums_ordered_with_duplicates.append({
+                        'albumartist': album_artist_for_key,
+                        'album': album_name,
+                        'date': album_date
+                    })
 
                 offset += len(batch_songs) # Advance offset by the number of songs actually retrieved in this batch
                 print(f"Core Info: Processed {offset}/{total_songs} songs...")
 
             except MPDError as mpd_e:
                 print(f"Core Error: MPD error during batch search (offset {offset}): {mpd_e}", file=sys.stderr)
-                break # Break if an MPD error occurs during batch fetching
+                break
             except Exception as e:
                 print(f"Core Error: Unexpected error processing batch (offset {offset}): {e}", file=sys.stderr)
-                break # Break if other error occurs
+                break
+
+        # --- Final Deduplication and ID assignment for 'latest' list ---
+        latest_final = []
+        seen_latest_keys_for_final_list = set()
+        for album_data in temp_latest_albums_ordered_with_duplicates:
+            current_album_key_for_final = (album_data['albumartist'], album_data['album'], album_data['date'])
+            if current_album_key_for_final not in seen_latest_keys_for_final_list:
+                seen_latest_keys_for_final_list.add(current_album_key_for_final)
+                latest_final.append({
+                    'albumartist': album_data['albumartist'],
+                    'album': album_data['album'],
+                    'date': album_data['date'],
+                    'id': str(len(latest_final)) # Assign ID after final list creation
+                })
+        
+        # Reverse the final 'latest' list to show most recent first, based on MPD scan order
+        latest_final.reverse()
+
 
         # Write data to cache files
         with open(ALBUM_CACHE_FILE, "wb") as f:
@@ -390,8 +423,10 @@ def create_cache(mpd_client):
         with open(TRACKS_CACHE_FILE, "wb") as f:
             f.write(msgpack.packb(tracks))
         with open(LATEST_CACHE_FILE, "wb") as f:
-            f.write(msgpack.packb(latest))
+            f.write(msgpack.packb(latest_final)) # Write the deduplicated and ordered 'latest_final' list
         print(f"Core Info: Cache created successfully. Total tracks processed: {len(tracks)}.")
+        print(f"Core Info: Total unique albums in main cache: {len(albums)}.")
+        print(f"Core Info: Total unique albums in latest cache: {len(latest_final)}.")
         return True
     except MPDError as mpd_e:
         print(f"Core Error: MPD error getting status or listing artists: {mpd_e}", file=sys.stderr)
