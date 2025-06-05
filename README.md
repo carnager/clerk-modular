@@ -67,19 +67,19 @@ These endpoints serve the web interface for Clerk.
 
 * **GET `/`**
 
-  * **Description:** Serves the main `index.html` file for the web interface.
+    * **Description:** Serves the main `index.html` file for the web interface.
 
-  * **Response:** `text/html` content of `index.html`.
+    * **Response:** `text/html` content of `index.html`.
 
-  * **Status Codes:** `200 OK`
+    * **Status Codes:** `200 OK`
 
 * **GET `/<path:filename>`**
 
-  * **Description:** Serves any other static assets (CSS, JavaScript, images) located in the configured `PUBLIC_DIR`.
+    * **Description:** Serves any other static assets (CSS, JavaScript, images) located in the configured `PUBLIC_DIR`.
 
-  * **Response:** The requested file.
+    * **Response:** The requested file.
 
-  * **Status Codes:** `200 OK`, `404 Not Found`
+    * **Status Codes:** `200 OK`, `404 Not Found`
 
 ---
 
@@ -89,239 +89,253 @@ These endpoints serve the web interface for Clerk.
 
 * **GET `/api/v1/albums`**
 
-  * **Description:** Retrieves a list of all albums in the Clerk cache, including their associated ratings.
+    * **Description:** Retrieves a list of all albums in the Clerk cache, including their associated ratings.
 
-  * **Response Body (JSON):**
+    * **Response Body (JSON):**
 
-    ```json
-    [
-        {
-            "albumartist": "Artist Name",
-            "album": "Album Title",
-            "date": "YYYY",
-            "id": "unique_id",
-            "rating": "X" // "X" is 1-10, or null if unrated
-        },
-        // ... more album objects
-    ]
-    ```
+        ```json
+        [
+            {
+                "albumartist": "Artist Name",
+                "album": "Album Title",
+                "date": "YYYY",
+                "id": "unique_id",
+                "rating": "X"
+            }
+        ]
+        ```
 
-  * **Status Codes:** `200 OK`
+        The `rating` field will be a string from "1" to "10", or `null` if the album is unrated.
+
+    * **Status Codes:** `200 OK`
 
 * **GET `/api/v1/albums/<album_id>/rating`**
 
-  * **Description:** Retrieves the rating for a specific album by its unique `album_id`.
+    * **Description:** Retrieves the rating for a specific album by its unique `album_id`.
 
-  * **Parameters:**
+    * **Parameters:**
 
-    * `album_id` (path): The unique ID of the album as found in `/api/v1/albums`.
+        * `album_id` (path): The unique ID of the album as found in `/api/v1/albums`.
 
-  * **Response Body (JSON):**
+    * **Response Body (JSON):**
 
-    ```json
-    {
-        "album_id": "unique_id",
-        "rating": "X" // "X" is 1-10, or null if unrated
-    }
-    ```
+        ```json
+        {
+            "album_id": "unique_id",
+            "rating": "X"
+        }
+        ```
 
-  * **Status Codes:** `200 OK`, `404 Not Found` (if album not found)
+        The `rating` field will be a string from "1" to "10", or `null` if the album is unrated.
+
+    * **Status Codes:** `200 OK`, `404 Not Found` (if album not found)
 
 * **POST `/api/v1/albums/<album_id>/rating`**
 
-  * **Description:** Sets or updates the rating for a specific album by its unique `album_id`.
+    * **Description:** Sets or updates the rating for a specific album by its unique `album_id`.
 
-  * **Parameters:**
+    * **Parameters:**
 
-    * `album_id` (path): The unique ID of the album.
+        * `album_id` (path): The unique ID of the album.
 
-  * **Request Body (JSON):**
+    * **Request Body (JSON):**
 
-    ```json
-    {
-        "rating": "X" // "X" can be a string "1" through "10", "---" to unset, or "Delete" to remove.
-    }
-    ```
+        ```json
+        {
+            "rating": "X"
+        }
+        ```
 
-  * **Response Body (JSON)::**
+        The `rating` value can be a string from "1" through "10", "---" to unset the rating, or "Delete" to remove the rating entirely.
 
-    ```json
-    {
-        "changed": true // true if the rating was updated/deleted, false otherwise
-    }
-    ```
+    * **Response Body (JSON):**
 
-  * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid rating value), `404 Not Found` (if album not found)
+        ```json
+        {
+            "changed": true
+        }
+        ```changed` will be `true` if the rating was successfully updated or deleted, `false` otherwise.
+
+    * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid rating value), `404 Not Found` (if album not found)
 
 ### **Tracks**
 
 * **GET `/api/v1/tracks`**
 
-  * **Description:** Retrieves a list of all individual tracks in the Clerk cache. These objects include `file` paths essential for MPD operations.
+    * **Description:** Retrieves a list of all individual tracks in the Clerk cache. These objects include `file` paths essential for MPD operations.
 
-  * **Response Body (JSON):**
+    * **Response Body (JSON):**
 
-    ```json
-    [
-        {
-            "track": "1",
-            "title": "Song Title",
-            "artist": "Artist Name",
-            "album": "Album Title",
-            "date": "YYYY",
-            "file": "/path/to/music/file.mp3", // Important: full path to the audio file
-            "id": "unique_id"
-        },
-        // ... more track objects
-    ]
-    ```
+        ```json
+        [
+            {
+                "track": "1",
+                "title": "Song Title",
+                "artist": "Artist Name",
+                "album": "Album Title",
+                "date": "YYYY",
+                "file": "/path/to/music/file.mp3",
+                "id": "unique_id"
+            }
+        ]
+        ```
 
-  * **Status Codes:** `200 OK`
+        The `file` field contains the full path to the audio file and is important for MPD interactions.
+
+    * **Status Codes:** `200 OK`
 
 ### **Playlist Management**
 
 * **POST `/api/v1/playlist/add/album/<album_id>`**
 
-  * **Description:** Adds a full album to the MPD playlist.
+    * **Description:** Adds a full album to the MPD playlist.
 
-  * **Parameters:**
+    * **Parameters:**
 
-    * `album_id` (path): The unique ID of the album to add.
+        * `album_id` (path): The unique ID of the album to add.
 
-  * **Request Body (JSON, optional):**
+    * **Request Body (JSON, optional):**
 
-    ```json
-    {
-        "mode": "add" // Optional. Can be "add" (default), "insert" (at current position), or "replace" (clear playlist first).
-    }
-    ```
+        ```json
+        {
+            "mode": "add"
+        }
+        ```
 
-  * **Response Body (JSON):**
+        The `mode` field is optional. It can be `"add"` (default, appends to playlist), `"insert"` (inserts at the current playback position), or `"replace"` (clears the playlist and adds the album).
 
-    ```json
-    {
-        "message": "Album added to playlist successfully."
-    }
-    ```
+    * **Response Body (JSON):**
 
-  * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid mode), `404 Not Found` (if album not found), `500 Internal Server Error` (if MPD operation fails)
+        ```json
+        {
+            "message": "Album added to playlist successfully."
+        }
+        ```
+
+    * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid mode), `404 Not Found` (if album not found), `500 Internal Server Error` (if MPD operation fails)
 
 * **POST `/api/v1/playlist/add/track/<track_id>`**
 
-  * **Description:** Adds a single track to the MPD playlist.
+    * **Description:** Adds a single track to the MPD playlist.
 
-  * **Parameters:**
+    * **Parameters:**
 
-    * `track_id` (path): The unique ID of the track to add.
+        * `track_id` (path): The unique ID of the track to add.
 
-  * **Request Body (JSON, optional):**
+    * **Request Body (JSON, optional):**
 
-    ```json
-    {
-        "mode": "add" // Optional. Can be "add" (default), "insert" (at current position), or "replace" (clear playlist first).
-    }
-    ```
+        ```json
+        {
+            "mode": "add"
+        }
+        ```
 
-  * **Response Body (JSON):**
+        The `mode` field is optional. It can be `"add"` (default, appends to playlist), `"insert"` (inserts at the current playback position), or `"replace"` (clears the playlist and adds the track).
 
-    ```json
-    {
-        "message": "Track added to playlist successfully in 'mode' mode."
-    }
-    ```
+    * **Response Body (JSON):**
 
-  * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid mode), `404 Not Found` (if track not found), `500 Internal Server Error` (if MPD operation fails)
+        ```json
+        {
+            "message": "Track added to playlist successfully in 'mode' mode."
+        }
+        ```
+
+    * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid mode), `404 Not Found` (if track not found), `500 Internal Server Error` (if MPD operation fails)
 
 ### **Playback Control**
 
 * **POST `/api/v1/playback/random/album`**
 
-  * **Description:** Clears the current playlist and adds a single random album, then starts playback.
+    * **Description:** Clears the current playlist and adds a single random album, then starts playback.
 
-  * **Response Body (JSON):**
+    * **Response Body (JSON):**
 
-    ```json
-    {
-        "message": "Playing: Artist - Album (YYYY)"
-    }
-    ```
+        ```json
+        {
+            "message": "Playing: Artist - Album (YYYY)"
+        }
+        ```
 
-    (Note: The exact message format depends on `clerk_core` output, but it typically returns information about the played item).
+        Note: The exact message format depends on `clerk_core` output, but it typically returns information about the played item.
 
-  * **Status Codes:** `200 OK`, `500 Internal Server Error` (if MPD operation fails)
+    * **Status Codes:** `200 OK`, `500 Internal Server Error` (if MPD operation fails)
 
 * **POST `/api/v1/playback/random/tracks`**
 
-  * **Description:** Clears the current playlist and adds a configured number of random tracks, then starts playback.
+    * **Description:** Clears the current playlist and adds a configured number of random tracks, then starts playback.
 
-  * **Response Body (JSON):**
+    * **Response Body (JSON):**
 
-    ```json
-    {
-        "message": "Playing X random tracks"
-    }
-    ```
+        ```json
+        {
+            "message": "Playing X random tracks"
+        }
+        ```
 
-  * **Status Codes:** `200 OK`, `500 Internal Server Error` (if MPD operation fails)
+    * **Status Codes:** `200 OK`, `500 Internal Server Error` (if MPD operation fails)
 
 ### **Cache Management**
 
 * **POST `/api/v1/cache/update`**
 
-  * **Description:** Forces a complete rebuild of the Clerk internal caches (albums and tracks). This can be useful after adding new music to your MPD library.
+    * **Description:** Forces a complete rebuild of the Clerk internal caches (albums and tracks). This can be useful after adding new music to your MPD library.
 
-  * **Response Body (JSON):**
+    * **Response Body (JSON):**
 
-    ```json
-    {
-        "message": "Cache updated"
-    }
-    ```
+        ```json
+        {
+            "message": "Cache updated"
+        }
+        ```
 
-    or
+        or
 
-    ```json
-    {
-        "error": "Cache update failed"
-    }
-    ```
+        ```json
+        {
+            "error": "Cache update failed"
+        }
+        ```
 
-  * **Status Codes:** `200 OK` (on success), `500 Internal Server Error` (on failure)
+    * **Status Codes:** `200 OK` (on success), `500 Internal Server Error` (on failure)
 
 ### **Current Playback Information**
 
 * **GET `/current_album/rating`**
 
-  * **Description:** Retrieves the local rating for the album of the currently playing song.
+    * **Description:** Retrieves the local rating for the album of the currently playing song.
 
-  * **Response Body (JSON):**
+    * **Response Body (JSON):**
 
-    ```json
-    {
-        "rating": "X" // "X" is 1-10, or null if unrated
-    }
-    ```
+        ```json
+        {
+            "rating": "X"
+        }
+        ```
 
-  * **Status Codes:** `200 OK`, `404 Not Found` (if no song is playing), `500 Internal Server Error`
+        The `rating` field will be a string from "1" to "10", or `null` if unrated.
+
+    * **Status Codes:** `200 OK`, `404 Not Found` (if no song is playing), `500 Internal Server Error`
 
 * **POST `/current_album/rating`**
 
-  * **Description:** Sets or updates the local rating for the album of the currently playing song.
+    * **Description:** Sets or updates the local rating for the album of the currently playing song.
 
-  * **Request Body (JSON):**
+    * **Request Body (JSON):**
 
-    ```json
-    {
-        "rating": "X" // "X" can be a string "1" through "10", "---" to unset, or "Delete" to remove.
-    }
-    ```
+        ```json
+        {
+            "rating": "X"
+        }
+        ```
 
-  * **Response Body (JSON):**
+        The `rating` value can be a string from "1" through "10", "---" to unset the rating, or "Delete" to remove the rating entirely.
 
-    ```json
-    {
-        "changed": true // true if the rating was updated/deleted, false otherwise
-    }
-    ```
+    * **Response Body (JSON):**
 
-  * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid rating value or request body), `404 Not Found` (if no song is playing), `415 Unsupported Media Type` (if Content-Type is not `application/json`), `500 Internal Server Error` (if MPD or core operation fails)
+        ```json
+        {
+            "changed": true
+        }
+        ```changed` will be `true` if the rating was updated or deleted, `false` otherwise.
+
+    * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid rating value or request body), `404 Not Found` (if no song is playing), `415 Unsupported Media Type` (if Content-Type is not `application/json`), `500 Internal Server Error` (if MPD or core operation fails)
