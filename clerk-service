@@ -169,22 +169,30 @@ def set_track_rating(track_id):
 @app.route('/api/v1/playlist/add/album/<album_id>', methods=['POST'])
 def add_album_to_playlist(album_id):
     data = request.get_json() or {}
-    mode = data.get('mode','add')
-    if mode not in ['add','insert','replace']:
-        return jsonify({"error":"Invalid mode"}), 400
-    albums = core.read_album_cache("album")
+    # Get the mode from the request payload. Default to 'album' for safety/consistency.
+    mode_from_request = data.get('list_mode', 'album') # Renamed to avoid conflict with playlist 'mode'
+
+    if mode_from_request not in ['album', 'latest']:
+        return jsonify({"error":"Invalid list mode for album lookup"}), 400
+
+    if data.get('mode') not in ['add','insert','replace']:
+        return jsonify({"error":"Invalid playlist mode"}), 400
+    
+    playlist_mode = data.get('mode', 'add')
+
+    # Read from the correct cache based on the received 'list_mode'
+    albums = core.read_album_cache(mode_from_request) # <<< CHANGED HERE!
+
     a = next((x for x in albums if x['id']==album_id), None)
     if not a:
         return jsonify({"error":"Album not found"}), 404
-    # Ensure MPD is connected
+    
     connect_mpd()
     
     try:
-        core.add_album_to_playlist(mpd, [a], mode) # Call the core function
-        # If no exception, it was successful. Return a clear success message.
+        core.add_album_to_playlist(mpd, [a], playlist_mode)
         return jsonify({"message": "Album added to playlist successfully."}), 200
     except Exception as e:
-        # Catch any potential errors during MPD interaction or in the core function
         return jsonify({"error": f"Failed to add album to playlist: {str(e)}"}), 500
 
 
