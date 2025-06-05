@@ -338,6 +338,8 @@ These endpoints serve the web interface for Clerk.
         {
             "changed": true
         }
-        ```changed` will be `true` if the rating was updated or deleted, `false` otherwise.
+        ```
+
+        changed` will be `true` if the rating was updated or deleted, `false` otherwise.
 
     * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid rating value or request body), `404 Not Found` (if no song is playing), `415 Unsupported Media Type` (if Content-Type is not `application/json`), `500 Internal Server Error` (if MPD or core operation fails)
