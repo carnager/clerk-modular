@@ -307,7 +307,7 @@ def create_cache(mpd_client):
     """
     print("Core Info: Creating cache using batched search with window parameter...")
     
-    all_songs_collected = [] # NEW: To collect all songs before sorting/processing
+    all_songs_collected = [] # To collect all songs before final processing
 
     batch_size = core_config['general'].get('cache_batch_size', 10000)
 
@@ -335,9 +335,9 @@ def create_cache(mpd_client):
                 batch_songs = mpd_client.search('filename', '', 'window', window_str)
                 
                 if not batch_songs:
-                    break # No more songs in this batch, or end of database
+                    break
 
-                all_songs_collected.extend(batch_songs) # Collect all songs
+                all_songs_collected.extend(batch_songs)
                 
                 offset += len(batch_songs)
                 print(f"Core Info: Fetched {offset}/{total_songs} songs...")
@@ -352,16 +352,14 @@ def create_cache(mpd_client):
         # --- Process all collected songs after fetching is complete ---
         albums = []
         tracks = []
-        latest_unique_albums = []
-        seen_albums_for_main_list = set()
-        seen_albums_for_latest_list = set()
+        # Temporary list to store albums for the 'latest' cache, in their original encounter order
+        temp_latest_albums_for_sorting = [] 
+        
+        seen_albums_for_main_list = set() # For 'albums' list deduplication
+
         track_id_counter = 0
 
-        # Sort all songs by last-modified time in descending order to get the "latest" first
-        # Handle cases where 'last-modified' might be missing (e.g., set to a default old date)
-        all_songs_collected.sort(key=lambda s: s.get('last-modified', '1970-01-01T00:00:00Z'), reverse=True)
-
-
+        # First pass: populate main albums and tracks list in original MPD scan order
         for song in all_songs_collected:
             album_artist_for_key = song.get('albumartist')
             if not album_artist_for_key:
@@ -371,47 +369,59 @@ def create_cache(mpd_client):
             album_date = song.get('date', '0000')
             track_file = song.get('file')
 
-            # Skip if essential metadata or file path is missing
             if not album_artist_for_key or not album_name or not album_date or not track_file:
                 continue
 
             album_key_tuple = (album_artist_for_key, album_name, album_date)
             
-            # --- Populate the 'albums' list (all unique albums) ---
+            # Populate the 'albums' list (all unique albums, in initial MPD order)
             if album_key_tuple not in seen_albums_for_main_list:
                 seen_albums_for_main_list.add(album_key_tuple)
                 albums.append({
                     'albumartist': album_artist_for_key,
                     'album': album_name,
                     'date': album_date,
-                    'id': str(len(albums)) # Unique ID for main albums list
+                    'id': str(len(albums))
                 })
             
-            # --- Populate the 'tracks' list (all individual songs) ---
+            # Populate the 'tracks' list (all individual songs)
             tracks.append({
                 'track': song.get('track', ''),
                 'title': song.get('title', ''),
-                'artist': song.get('artist'), # Keep original artist tag for tracks
+                'artist': song.get('artist'),
                 'album': album_name,
                 'date': album_date,
                 'file': track_file,
-                'id': str(track_id_counter) # Unique ID for each track
+                'id': str(track_id_counter)
             })
             track_id_counter += 1
 
-            # --- Populate the 'latest_unique_albums' list ---
-            # Ensure uniqueness for 'latest' list while preserving order of first encounter (from sorted list)
+            # Also add to temporary list for 'latest' sorting
+            temp_latest_albums_for_sorting.append({
+                'albumartist': album_artist_for_key,
+                'album': album_name,
+                'date': album_date,
+                'last-modified': song.get('last-modified', '1970-01-01T00:00:00Z') # Capture last-modified
+            })
+
+        # --- Second pass: Deduplicate and sort for the 'latest' list ---
+        latest_unique_albums = []
+        seen_albums_for_latest_list = set()
+
+        # Sort the temporary list by 'last-modified' in descending order
+        temp_latest_albums_for_sorting.sort(key=lambda a: a.get('last-modified', '1970-01-01T00:00:00Z'), reverse=True)
+
+        for album_data in temp_latest_albums_for_sorting:
+            album_key_tuple = (album_data['albumartist'], album_data['album'], album_data['date'])
             if album_key_tuple not in seen_albums_for_latest_list:
                 seen_albums_for_latest_list.add(album_key_tuple)
                 latest_unique_albums.append({
-                    'albumartist': album_artist_for_key,
-                    'album': album_name,
-                    'date': album_date,
-                    'id': str(len(latest_unique_albums)) # Unique ID for items in this list
+                    'albumartist': album_data['albumartist'],
+                    'album': album_data['album'],
+                    'date': album_data['date'],
+                    'id': str(len(latest_unique_albums)) # Unique ID for this list
                 })
         
-        # 'latest_unique_albums' is now already sorted by last-modified (desc) due to previous sort of all_songs_collected
-
         # Write data to cache files
         with open(ALBUM_CACHE_FILE, "wb") as f:
             f.write(msgpack.packb(albums))
@@ -429,6 +439,7 @@ def create_cache(mpd_client):
     except Exception as e:
         print(f"Core Error: Cache creation failed: {e}", file=sys.stderr)
         return False
+        
 
 def check_update(mpd_client):
     files = [ALBUM_CACHE_FILE, TRACKS_CACHE_FILE, LATEST_CACHE_FILE, RATINGS_CACHE_FILE]
