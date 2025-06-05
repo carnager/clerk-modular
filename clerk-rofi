@@ -174,27 +174,41 @@ def add_track():
     if not selected_ids:
         return
 
-    action = _menu(['Add','Insert','Replace','Rate Track (MPD Sticker)'],
-                   trim='no')
-    if action not in ('Add','Insert','Replace','Rate Track (MPD Sticker)'):
+    action_options = ['Add','Insert','Replace','Rate Track (MPD Sticker)']
+    action = _menu(action_options, trim='no') # Added 'prompt' for rofi
+    if action not in action_options:
         return
 
     if action == 'Rate Track (MPD Sticker)':
         for t in tracks:
             if t['id'] in selected_ids:
-                prompt = f"{t['artist']} - {t['title']}"
+                prompt = f"{t.get('artist', 'Unknown Artist')} - {t.get('title', 'Unknown Title')}"
                 val = core.input_rating(prompt,
                                          menu_tool,
                                          menu_prompt)
-                if val == 'Delete':
-                    m.sticker_delete('song', t['file'], 'rating')
-                else:
-                    m.sticker_set('song', t['file'], 'rating', val)
-        return
 
-    picked = [t for t in tracks if t['id'] in selected_ids]
+                # Ensure 'file' key exists before attempting sticker operations
+                track_file = t.get('file')
+                if not track_file:
+                    print(f"Core Warning: Cannot rate track '{prompt}' due to missing 'file' key.", file=sys.stderr)
+                    continue # Skip to the next selected track
+
+                try:
+                    if val == 'Delete':
+                        m.sticker_delete('song', track_file, 'rating')
+                        print(f"Sticker deleted for: {prompt}")
+                    else:
+                        m.sticker_set('song', track_file, 'rating', val)
+                        print(f"Sticker set for: {prompt} - Rating: {val}")
+                except Exception as e:
+                    # Catch specific MPDError if you want, but general Exception is fine for now
+                    print(f"Core Error: Failed to update sticker for '{prompt}' (file: {track_file}): {e}", file=sys.stderr)
+        return # Important: Exit after handling rating actions
+
+    # This part executes if action is 'Add', 'Insert', or 'Replace'
+    picked_tracks_for_playlist = [t for t in tracks if t['id'] in selected_ids]
     core.add_track_to_playlist(m,
-                               picked,
+                               picked_tracks_for_playlist,
                                mode=action.lower())
 
 def random_album_ui():
