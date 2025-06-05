@@ -268,13 +268,3 @@ POST /current_track/rating
 * Ratings for albums are stored via internal caching.
 * Track ratings are managed using MPD stickers.
 * JSON request bodies must include `Content-Type: application/json`.
-
----
-
-## License
-
-MIT or your preferred license here.
-
----
-
-*This API is part of the Clerk project: a music metadata and playback assistant built around MPD.*
