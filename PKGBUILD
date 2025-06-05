@@ -28,6 +28,8 @@ package_clerk-rofi() {
   depends=('rofi' 'clerk-core')
   install -Dm755 "$srcdir/clerk-modular/clerk-rofi" \
                   "$pkgdir/usr/bin/clerk-rofi"
+  install -Dm755 "$srcdir/clerk-modular/clerk-api-rofi" \
+                  "$pkgdir/usr/bin/clerk-api-rofi"
 }
 
 package_clerk-web() {
