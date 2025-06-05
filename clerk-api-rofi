@@ -1,0 +1,409 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import subprocess
+import toml
+import requests # New: For making HTTP requests
+import json     # New: For handling JSON data
+
+# --- Configuration File Handling ------------------------------------------------
+xdg_config = os.environ.get('XDG_CONFIG_HOME', os.path.join(os.environ.get('HOME', ''), '.config'))
+conf_dir = os.path.join(xdg_config, 'clerk')
+conf_path = os.path.join(conf_dir, 'clerk-rofi-api.conf') # New config file name
+
+# Default configuration values for the API client
+DEFAULT_CONFIG = {
+    'general': {
+        'menu_prompt': 'Clerk-API',
+        'menu_tool': ['rofi', '-dmenu', '-p', 'PLACEHOLDER'],
+        'api_base_url': 'http://localhost:5000/api/v1' # New: Base URL for your Flask API
+    },
+    'columns': {
+        'artist_width': 30,
+        'albumartist_width': 30,
+        'date_width': 6,
+        'album_width': 40,
+        'id_width': 5,
+        'title_width': 40,
+        'track_width': 5
+    }
+}
+
+# Check if config directory exists, if not, create it
+os.makedirs(conf_dir, exist_ok=True)
+
+# Check if config file exists, if not, create it with default values
+if not os.path.exists(conf_path):
+    print(f"Configuration file not found. Generating default config at: {conf_path}", file=sys.stderr)
+    try:
+        with open(conf_path, 'w') as f:
+            toml.dump(DEFAULT_CONFIG, f)
+    except IOError as e:
+        print(f"Fatal: Could not create config file {conf_path} – {e}", file=sys.stderr)
+        sys.exit(1)
+
+# Load Rofi UI Config
+try:
+    cfg = toml.load(conf_path)
+except toml.TomlDecodeError as e:
+    print(f"Fatal: Error decoding TOML configuration file {conf_path} – {e}", file=sys.stderr)
+    sys.exit(1)
+except FileNotFoundError:
+    print(f"Fatal: Configuration file {conf_path} not found after creation attempt.", file=sys.stderr)
+    sys.exit(1)
+
+# API Base URL
+API_BASE_URL = cfg['general']['api_base_url']
+if not API_BASE_URL.endswith('/'):
+    API_BASE_URL += '/'
+
+# Rofi Menu Tool and Prompt
+menu_prompt = cfg['general']['menu_prompt']
+menu_tool = [w.replace('PLACEHOLDER', menu_prompt) for w in cfg['general']['menu_tool']]
+
+# Column widths
+artist_w = int(cfg['columns']['artist_width'])
+albumartist_w = int(cfg['columns']['albumartist_width'])
+date_w = int(cfg['columns']['date_width'])
+album_w = int(cfg['columns']['album_width'])
+id_w = int(cfg['columns']['id_width'])
+title_w = int(cfg['columns']['title_width'])
+track_w = int(cfg['columns']['track_width'])
+
+
+# ── HTTP Request Helper ────────────────────────────────────────────────────────
+def make_api_request(method, endpoint, json_data=None):
+    """
+    Helper function to make HTTP requests to the Flask API.
+    Handles common error cases.
+    """
+    url = f"{API_BASE_URL}{endpoint}"
+    try:
+        if method == 'GET':
+            response = requests.get(url, timeout=10)
+        elif method == 'POST':
+            response = requests.post(url, json=json_data, timeout=10)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        return response.json()
+    except requests.exceptions.Timeout:
+        print(f"Error: Request to {url} timed out.", file=sys.stderr)
+        return None
+    except requests.exceptions.ConnectionError:
+        print(f"Error: Could not connect to API at {url}. Is clerk-service running?", file=sys.stderr)
+        return None
+    except requests.exceptions.HTTPError as e:
+        print(f"Error: HTTP {response.status_code} for {url} - {response.text}", file=sys.stderr)
+        return None
+    except json.JSONDecodeError:
+        print(f"Error: Could not decode JSON from response at {url}. Response: {response.text}", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred during API request to {url}: {e}", file=sys.stderr)
+        return None
+
+# ── Rofi Menu Helper (Unchanged) ────────────────────────────────────────────
+def _menu(lines, trim='no'):
+    """
+    Show lines in Rofi. If trim=='yes', return list of IDs (second-to-last token).
+    Otherwise, return the single selected line.
+    """
+    p = subprocess.Popen(menu_tool,
+                         stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL)
+    inp = "\n".join(lines).encode('utf-8')
+    out, _ = p.communicate(inp)
+    if p.returncode != 0:
+        return [] if trim=='yes' else ''
+    sel = out.decode('utf-8', errors='replace').splitlines()
+    if trim=='yes':
+        ids = []
+        for line in sel:
+            parts = line.split()
+            if len(parts) >= 2:
+                # second-to-last part is the ID (last is 'r=<rating>')
+                ids.append(parts[-2])
+        return ids
+    return sel[0].strip() if sel else ''
+
+# ── Formatting Helpers (Adapted for API JSON structure) ────────────────────────
+def format_album_line(a):
+    # API response provides rating directly in the album object
+    rating = a.get('rating', '-') if a.get('rating') is not None else '-'
+    base = (f"{str(a.get('albumartist', '')):<{albumartist_w}} "
+            f"{str(a.get('date', '0000')):<{date_w}} "
+            f"{str(a.get('album', '')):<{album_w}} "
+            f"{str(a.get('id', '')):<{id_w}}")
+    return f"{base} r={rating}"
+
+def format_track_line(t):
+    track_num = t.get('track', '')
+    if isinstance(track_num, list):
+        track_num = track_num[0] if track_num else ''
+
+    # The API's /api/v1/tracks doesn't include album rating, only track data
+    # To get album rating, we'd need another API call or for the API to include it.
+    # For now, we'll just show '-' for rating for tracks unless updated Flask service.
+    # However, if we're dealing with current_track, we can get its sticker rating
+    # This format_track_line is for general list display, not specific current track.
+    rating = '-' 
+    # If the track object itself had a 'sticker_rating' from the API, we could use it:
+    # rating = t.get('sticker_rating', '-') if t.get('sticker_rating') is not None else '-'
+
+
+    base = (f"{str(track_num):<{track_w}} "
+            f"{str(t.get('title', '')):<{title_w}} "
+            f"{str(t.get('artist', '')):<{artist_w}} "
+            f"{str(t.get('album', '')):<{album_w}} "
+            f"{str(t.get('date', '0000')):<{date_w}} "
+            f"{str(t.get('id', '')):<{id_w}}")
+    return f"{base} r={rating}" # The 'r=' part might be inaccurate if rating is missing
+
+
+# ── UI Actions (Adapted for API Communication) ─────────────────────────────────
+def add_album(mode_filter): # Renamed `mode` to `mode_filter` to avoid confusion with playlist mode
+    albums = make_api_request('GET', 'albums')
+    if albums is None:
+        print("Failed to retrieve albums from API.", file=sys.stderr)
+        return
+    
+    # Filter 'latest' client-side if needed (API /albums provides all)
+    if mode_filter == 'latest':
+        # This is a simplification; your core.py 'latest' cache might be ordered differently
+        # For true "latest", clerk-service.py would need a /api/v1/latest_albums endpoint.
+        albums = albums[-100:] # Example: just last 100 albums if no dedicated API.
+
+    if not albums:
+        print("No albums available.", file=sys.stderr)
+        return
+
+    lines = [format_album_line(a) for a in albums]
+    selected_ids = _menu(lines, trim='yes')
+    if not selected_ids:
+        return
+
+    action_options = ['Add','Insert','Replace','Rate']
+    action = _menu(action_options, trim='no') # No 'prompt' arg here as per _menu definition
+    if action not in action_options:
+        return
+
+    if action == 'Rate':
+        for a in albums:
+            if a['id'] in selected_ids:
+                prompt = f"{a.get('albumartist', 'N/A')} - {a.get('album', 'N/A')}"
+                val = _input_rating_rofi_style(prompt) # Using a new helper function for rating input
+
+                # Send rating update via API
+                response = make_api_request('POST', f'albums/{a["id"]}/rating', json_data={'rating': val})
+                if response and response.get('changed'):
+                    print(f"Rated '{prompt}' as {val}.")
+                elif response:
+                    print(f"Rating for '{prompt}' already {val} or no change needed.")
+                else:
+                    print(f"Failed to rate '{prompt}'.")
+        return # done rating
+
+    # Add/Insert/Replace to playlist via API
+    for album_id in selected_ids:
+        response = make_api_request('POST', f'playlist/add/album/{album_id}', json_data={'mode': action.lower()})
+        if response and response.get('message'):
+            print(f"Album ID {album_id} added to playlist ({action.lower()}).")
+        else:
+            print(f"Failed to add album ID {album_id} to playlist.")
+
+
+def add_track():
+    tracks = make_api_request('GET', 'tracks')
+    if tracks is None:
+        print("Failed to retrieve tracks from API.", file=sys.stderr)
+        return
+
+    if not tracks:
+        print("No tracks available.", file=sys.stderr)
+        return
+
+    lines = [format_track_line(t) for t in tracks]
+    selected_ids = _menu(lines, trim='yes')
+    if not selected_ids:
+        return
+
+    # Add 'Rate Track (MPD Sticker)' option back
+    action_options = ['Add','Insert','Replace','Rate Track (MPD Sticker)']
+    action = _menu(action_options, trim='no')
+    if action not in action_options:
+        return
+
+    if action == 'Rate Track (MPD Sticker)':
+        # Fetch the full track objects for the selected IDs to get their 'file' path
+        selected_tracks_data = [t for t in tracks if t['id'] in selected_ids]
+        for t in selected_tracks_data:
+            prompt = f"{t.get('artist', 'N/A')} - {t.get('title', 'N/A')}"
+            val = _input_rating_rofi_style(prompt)
+
+            # Send track rating update via API
+            response = make_api_request('POST', f'tracks/{t["id"]}/rating', json_data={'rating': val})
+            if response and response.get('changed'):
+                print(f"Rated track '{prompt}' as {val}.")
+            elif response:
+                print(f"Rating for track '{prompt}' already {val} or no change needed.")
+            else:
+                print(f"Failed to rate track '{prompt}'.")
+        return # Exit after handling rating actions
+
+    # Add/Insert/Replace to playlist via API
+    for track_id in selected_ids:
+        response = make_api_request('POST', f'playlist/add/track/{track_id}', json_data={'mode': action.lower()})
+        if response and response.get('message'):
+            print(f"Track ID {track_id} added to playlist ({action.lower()}).")
+        else:
+            print(f"Failed to add track ID {track_id} to playlist.")
+
+def random_album_ui():
+    response = make_api_request('POST', 'playback/random/album')
+    if response and response.get('message'):
+        print(f"Random album initiated: {response.get('message')}")
+    elif response:
+        print(f"Random album initiated: {response}") # Fallback for less specific messages
+    else:
+        print("Failed to initiate random album playback.")
+
+def random_tracks_ui():
+    response = make_api_request('POST', 'playback/random/tracks')
+    if response and response.get('message'):
+        print(f"Random tracks initiated: {response.get('message')}")
+    elif response:
+        print(f"Random tracks initiated: {response}") # Fallback for less specific messages
+    else:
+        print("Failed to initiate random tracks playback.")
+
+def current_track():
+    # Options for current track/album
+    action_options = ['Rate Album (Local)', 'Rate Track (MPD Sticker)']
+    action = _menu(action_options, trim='no')
+    if action not in action_options:
+        return
+
+    if action == 'Rate Album (Local)':
+        # Path updated to /api/v1/current_album/rating
+        current_album_info = make_api_request('GET', 'current_album/rating')
+        if current_album_info is None or current_album_info.get('error'):
+            print(f"Failed to get current album info: {current_album_info.get('error') if current_album_info else 'Unknown error'}", file=sys.stderr)
+            return
+
+        prompt = "Current Album Rating"
+        val = _input_rating_rofi_style(prompt)
+
+        # Path updated to /api/v1/current_album/rating
+        response = make_api_request('POST', 'current_album/rating', json_data={'rating': val})
+        if response and response.get('changed'):
+            print(f"Rated current album as {val}.")
+        elif response:
+            print(f"Current album rating already {val} or no change needed.")
+        else:
+            print(f"Failed to rate current album.")
+
+    elif action == 'Rate Track (MPD Sticker)':
+        # Path updated to /api/v1/current_track/rating
+        current_track_info = make_api_request('GET', 'current_track/rating')
+        if current_track_info is None or current_track_info.get('error'):
+            print(f"Failed to get current track info: {current_track_info.get('error') if current_track_info else 'Unknown error'}", file=sys.stderr)
+            return
+        
+        # If API returns song details like title/artist, use them for prompt
+        # For now, current_track/rating GET only gives rating, so prompt is generic
+        prompt_text = "Current Track Rating"
+        # If the GET for /current_track/rating provided artist/title, we'd use:
+        # prompt_text = f"{current_track_info.get('artist', 'N/A')} - {current_track_info.get('title', 'N/A')}"
+
+        val = _input_rating_rofi_style(prompt_text)
+
+        # Path updated to /api/v1/current_track/rating
+        response = make_api_request('POST', 'current_track/rating', json_data={'rating': val})
+        if response and response.get('changed'):
+            print(f"Rated current track as {val}.")
+        elif response:
+            print(f"Current track rating already {val} or no change needed.")
+        else:
+            print(f"Failed to rate current track.")
+
+
+# Helper for rating input, as core.input_rating relies on core internals
+def _input_rating_rofi_style(prompt_text):
+    options = ['1','2','3','4','5','6','7','8','9','10','---','Delete']
+    full_prompt = f"{prompt_text} {menu_prompt}" # Reuse menu_prompt as the sub-prompt
+    
+    # Simulate core.input_rating's subprocess call
+    custom_menu_tool = [w.replace(menu_prompt, full_prompt) for w in cfg['general']['menu_tool']]
+
+    try:
+        menu = subprocess.Popen(custom_menu_tool, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        input_data = "\n".join(options).encode('utf-8')
+        stdout, _ = menu.communicate(input=input_data)
+        if menu.returncode != 0:
+            return "---"
+        result = stdout.decode('utf-8', errors='replace').strip()
+        return result if result else "---"
+    except Exception as e:
+        print(f"Error: input_rating failed: {e}", file=sys.stderr)
+        return "---"
+
+
+def cache_update():
+    response = make_api_request('POST', 'cache/update')
+    if response and response.get('message'):
+        print(f"Cache update: {response.get('message')}")
+    elif response and response.get('error'):
+        print(f"Cache update failed: {response.get('error')}", file=sys.stderr)
+    else:
+        print("Failed to get cache update status from API.", file=sys.stderr)
+
+
+# ── Help Text and Main ─────────────────────────────────────────────────────────
+# Default values for help text if clerk-service doesn't provide this info via API
+ra = "N/A (via API)"
+nt = "N/A (via API)"
+
+# If you want to fetch this from API, clerk-service needs a /api/v1/config endpoint
+# Example:
+# config_from_api = make_api_request('GET', 'config')
+# if config_from_api:
+#     ra = config_from_api['general']['random_artist']
+#     nt = config_from_api['general']['number_of_tracks']
+
+
+help_txt = f"""
+Usage: clerk-api [option]
+ -a   Add Albums
+ -l   Add Latest Albums (client-side approximated)
+ -t   Add Tracks
+ -A   Random Album
+ -T   Random Tracks (by '{ra}', count {nt})
+ -c   Rate Current Album/Track
+ -u   Rebuild Caches
+ -x   Regenerate UI Config (this script's config)
+ -h   Show This Help
+"""
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1]
+        match cmd:
+            case '-a': add_album('album')
+            case '-l': add_album('latest')
+            case '-t': add_track()
+            case '-A': random_album_ui()
+            case '-T': random_tracks_ui()
+            case '-c': current_track()
+            case '-u': cache_update()
+            case '-x':
+                print(f"To regenerate {conf_path}, delete the file manually.")
+            case '-h'|_: print(help_txt)
+    else:
+        print(help_txt)
+
+    sys.exit(0)
+
