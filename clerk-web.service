@@ -4,12 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-# Runs as the invoking user
 ExecStart=/usr/bin/clerk-service
 Restart=on-failure
-# Optional: set any env vars
 Environment=FLASK_ENV=production
+Environment=CLERK_WEB_HOST=0.0.0.0
+Environment=CLERK_WEB_PORT=6601
 
 [Install]
 WantedBy=default.target
-
