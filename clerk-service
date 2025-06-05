@@ -114,6 +114,45 @@ def set_album_rating(album_id):
     changed = core.update_album_rating(a, val)
     return jsonify({"changed": changed}), 200
 
+@app.route('/api/v1/tracks/<track_id>/rating', methods=['POST'])
+def set_track_rating(track_id):
+    """
+    Sets or updates the rating for a specific track by its unique track_id using MPD stickers.
+    """
+    data = request.get_json() or {}
+    val = str(data.get('rating', '---'))
+
+    if val not in [str(i) for i in range(1, 11)] + ['Delete', '---']:
+        logger.warning(f"Invalid rating value '{val}' received for track rating.")
+        return jsonify({"error": "Invalid rating. Must be '1'-'10', '---', or 'Delete'."}), 400
+
+    tracks = core.read_tracks_cache()
+    t = next((x for x in tracks if x['id'] == track_id), None)
+    if not t:
+        logger.warning(f"Track with ID '{track_id}' not found in cache.")
+        return jsonify({"error": "Track not found"}), 404
+
+    # Ensure the track data has the 'file' key, which is essential for MPD sticker operations
+    track_file = t.get('file')
+    if not track_file:
+        logger.error(f"Track data for ID '{track_id}' is missing the 'file' key. Cannot set sticker rating.")
+        return jsonify({"error": "Track data incomplete (missing 'file' path)."}), 422 # Unprocessable Entity
+
+    connect_mpd() # Ensure MPD is connected
+
+    try:
+        changed = core.update_track_rating(mpd, t, val)
+        if changed:
+            logger.info(f"Track '{t.get('title', 'N/A')}' (ID: {track_id}) rating updated to {val}.")
+            return jsonify({"changed": True, "message": f"Track rating updated to {val}"}), 200
+        else:
+            logger.info(f"Track '{t.get('title', 'N/A')}' (ID: {track_id}) rating not changed (value was already {val} or '---').")
+            return jsonify({"changed": False, "message": "Rating not changed"}), 200
+    except Exception as e:
+        logger.error(f"Failed to set track rating for ID '{track_id}': {str(e)}", exc_info=True)
+        return jsonify({"error": f"Failed to set track rating: {str(e)}"}), 500
+
+
 @app.route('/api/v1/playlist/add/album/<album_id>', methods=['POST'])
 def add_album_to_playlist(album_id):
     data = request.get_json() or {}
@@ -188,7 +227,7 @@ def cache_update():
     return (jsonify({"message":"Cache updated"}), 200) if ok \
            else (jsonify({"error":"Cache update failed"}), 500)
 
-@app.route('/current_album/rating', methods=['GET'])
+@app.route('/api/v1/current_album/rating', methods=['GET'])
 def get_current_album_rating():
     try:
         connect_mpd()
@@ -205,7 +244,43 @@ def get_current_album_rating():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/current_album/rating', methods=['POST'])
+@app.route('/api/v1/current_track/rating', methods=['GET']) # New endpoint for current track rating
+def get_current_track_rating():
+    """
+    Retrieves the MPD sticker rating for the currently playing track.
+    """
+    try:
+        connect_mpd()
+        song = mpd.currentsong()
+        if not song:
+            return jsonify({"error": "No song playing"}), 404
+
+        track_file = song.get('file')
+        if not track_file:
+            logger.error(f"Current song is missing 'file' key: {song}")
+            return jsonify({"error": "Current track data incomplete (missing 'file' path)."}), 422 # Unprocessable Entity
+
+        try:
+            # sticker_get returns a dict like {'sticker': 'rating_value'}
+            sticker = mpd.sticker_get('song', track_file, 'rating')
+            rating = sticker.get('rating') # Extract the 'rating' value
+            return jsonify({"rating": rating}), 200
+        except MPDError as e:
+            # MPDError can occur if no sticker exists, or other MPD issues
+            if "No such sticker" in str(e): # Specific error for non-existent sticker
+                return jsonify({"rating": None, "message": "No rating sticker found for this track."}), 200
+            else:
+                logger.error(f"MPD error getting sticker for current track: {e}", exc_info=True)
+                return jsonify({"error": f"MPD error getting track rating: {str(e)}"}), 500
+        except Exception as e:
+            logger.error(f"Unexpected error getting sticker for current track: {e}", exc_info=True)
+            return jsonify({"error": f"Failed to get current track rating: {str(e)}"}), 500
+    except Exception as e:
+        logger.error(f"Error connecting to MPD or getting current song for track rating: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/v1//current_album/rating', methods=['POST'])
 def set_current_album_rating():
     logger.info(f"Received POST request to /current_album/rating from {request.remote_addr}")
     logger.info(f"Request Headers: {request.headers}")
@@ -260,6 +335,51 @@ def set_current_album_rating():
     except Exception as e:
         logger.error(f"Error during MPD or core update: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/v1/current_track/rating', methods=['POST']) # New endpoint for current track rating
+def set_current_track_rating():
+    """
+    Sets or updates the MPD sticker rating for the currently playing track.
+    """
+    data = request.get_json() or {}
+    val = str(data.get('rating', '---'))
+
+    if val not in [str(i) for i in range(1, 11)] + ['Delete', '---']:
+        logger.warning(f"Invalid rating value '{val}' received for current track rating.")
+        return jsonify({"error": "Invalid rating. Must be '1'-'10', '---', or 'Delete'."}), 400
+
+    try:
+        connect_mpd()
+        song = mpd.currentsong()
+        if not song:
+            logger.warning("No song playing, cannot set current track rating.")
+            return jsonify({"error": "No song playing"}), 404
+
+        track_data = {
+            'file': song.get('file'),
+            'title': song.get('title'),
+            'artist': song.get('artist')
+        }
+        
+        # Ensure track_data includes 'file' which is crucial for sticker operations
+        if not track_data.get('file'):
+            logger.error(f"Current song is missing 'file' key: {song}. Cannot set sticker rating.")
+            return jsonify({"error": "Current track data incomplete (missing 'file' path)."}), 422 # Unprocessable Entity
+
+        logger.info(f"Attempting to update rating for current track: {track_data.get('title', 'N/A')}")
+        changed = core.update_track_rating(mpd, track_data, val)
+
+        if changed:
+            logger.info(f"Current track rating updated to {val}.")
+            return jsonify({"changed": True, "message": f"Current track rating updated to {val}"}), 200
+        else:
+            logger.info(f"Current track rating not changed (value was already {val} or '---').")
+            return jsonify({"changed": False, "message": "Rating not changed"}), 200
+
+    except Exception as e:
+        logger.error(f"Error during MPD or core update for current track rating: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
 
 # ── Run Application ────────────────────────────────────────────────────────────
 if __name__ == '__main__':

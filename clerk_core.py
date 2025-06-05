@@ -195,6 +195,40 @@ def update_album_rating(album_data, rating_value):
 
     return changed
 
+def update_track_rating(mpd_client, track_data, rating_value):
+    """
+    Update a single track's rating via MPD sticker.
+    track_data: dictionary containing track information, *must* include 'file' key.
+    rating_value: string "1" to "10", "---", or "Delete".
+    """
+    track_file = track_data.get('file')
+    if not track_file:
+        print(f"Core Error: Cannot rate track, missing 'file' key in track_data: {track_data}", file=sys.stderr)
+        return False
+
+    try:
+        if rating_value == "Delete":
+            mpd_client.sticker_delete('song', track_file, 'rating')
+            print(f"Core Info: Deleted sticker for track '{track_data.get('title', 'N/A')}' (file: {track_file})")
+            return True
+        elif rating_value == "---":
+            # No action needed if explicitly set to "---", which means unset/no change
+            print(f"Core Info: Rating for track '{track_data.get('title', 'N/A')}' (file: {track_file}) set to '---' (no change/unset).")
+            return False # Indicate no change to sticker
+        elif rating_value in [str(i) for i in range(1, 11)]:
+            mpd_client.sticker_set('song', track_file, 'rating', rating_value)
+            print(f"Core Info: Set sticker for track '{track_data.get('title', 'N/A')}' (file: {track_file}) to {rating_value}")
+            return True
+        else:
+            print(f"Core Warning: Invalid rating value '{rating_value}' for track rating.", file=sys.stderr)
+            return False
+    except MPDError as e:
+        print(f"Core Error: MPD error updating sticker for track '{track_data.get('title', 'N/A')}' (file: {track_file}): {e}", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"Core Error: Unexpected error updating sticker for track '{track_data.get('title', 'N/A')}' (file: {track_file}): {e}", file=sys.stderr)
+        return False
+
 
 def input_rating(prompt_text, menu_tool, menu_prompt):
     options = ['1','2','3','4','5','6','7','8','9','10','---','Delete']
