@@ -154,7 +154,9 @@ These endpoints serve the web interface for Clerk.
         {
             "changed": true
         }
-        ```changed` will be `true` if the rating was successfully updated or deleted, `false` otherwise.
+        ```
+
+        changed` will be `true` if the rating was successfully updated or deleted, `false` otherwise.
 
     * **Status Codes:** `200 OK`, `400 Bad Request` (for invalid rating value), `404 Not Found` (if album not found)
 
