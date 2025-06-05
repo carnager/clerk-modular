@@ -20,6 +20,7 @@ Note for packagers: clerk-rofi and clerk-service expect the clerk_core.py file t
 - **`clerk_core`**: ~/.config/clerk/clerk-core.conf
 - **`clerk-rofi`**: ~/.config/clerk/clerk/clerk-rofi.conf
 - **`clerk-api-rofi`**: ~/.config/clerk/clerk-api-rofi.conf
+
 A default configuration will be generated if it doesn't exist.
 
 ## Usage
