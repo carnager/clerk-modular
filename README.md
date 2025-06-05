@@ -13,7 +13,7 @@ It consists of:
 - use the provided PKGBUILD
 
 ### Others:
-Note for packagers: rofi-clerk and rofi-service expect the clerk_core.py file to be in the same directory.
+Note for packagers: clerk-rofi and clerk-service expect the clerk_core.py file to be in the same directory.
 
 ## Configuration
 The core module and clerk-rofi tool expect configuration files at ~/.config/clerk/clerk-core.conf and ~/.config/clerk/clerk/clerk-rofi.conf.
