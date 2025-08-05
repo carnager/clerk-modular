@@ -223,6 +223,70 @@ def add_track_to_playlist(track_id):
         return jsonify({"error": f"Failed to add track to playlist: {str(e)}"}), 500
 
 
+@app.route('/api/v1/playlist/add/albums', methods=['POST'])
+def add_albums_to_playlist():
+    """Bulk add multiple albums to playlist"""
+    data = request.get_json() or {}
+    album_ids = data.get('album_ids', [])
+    mode = data.get('mode', 'add')
+    list_mode = data.get('list_mode', 'album')
+
+    if not album_ids or not isinstance(album_ids, list):
+        return jsonify({"error": "album_ids must be a non-empty list"}), 400
+
+    if mode not in ['add', 'insert', 'replace']:
+        return jsonify({"error": "Invalid mode. Must be 'add', 'insert', or 'replace'."}), 400
+
+    if list_mode not in ['album', 'latest']:
+        return jsonify({"error": "Invalid list_mode"}), 400
+
+    albums = core.read_album_cache(list_mode)
+    selected_albums = [a for a in albums if a['id'] in album_ids]
+    
+    if len(selected_albums) != len(album_ids):
+        return jsonify({"error": "Some albums not found"}), 404
+
+    connect_mpd()
+
+    try:
+        core.add_album_to_playlist(mpd, selected_albums, mode)
+        logger.info(f"Added {len(selected_albums)} albums to playlist in mode: {mode}")
+        return jsonify({"message": f"{len(selected_albums)} albums added to playlist successfully"}), 200
+    except Exception as e:
+        logger.error(f"Failed to add albums to playlist: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Failed to add albums to playlist: {str(e)}"}), 500
+
+
+@app.route('/api/v1/playlist/add/tracks', methods=['POST'])
+def add_tracks_to_playlist():
+    """Bulk add multiple tracks to playlist"""
+    data = request.get_json() or {}
+    track_ids = data.get('track_ids', [])
+    mode = data.get('mode', 'add')
+
+    if not track_ids or not isinstance(track_ids, list):
+        return jsonify({"error": "track_ids must be a non-empty list"}), 400
+
+    if mode not in ['add', 'insert', 'replace']:
+        return jsonify({"error": "Invalid mode. Must be 'add', 'insert', or 'replace'."}), 400
+
+    tracks = core.read_tracks_cache()
+    selected_tracks = [t for t in tracks if t['id'] in track_ids]
+    
+    if len(selected_tracks) != len(track_ids):
+        return jsonify({"error": "Some tracks not found"}), 404
+
+    connect_mpd()
+
+    try:
+        core.add_track_to_playlist(mpd, selected_tracks, mode=mode)
+        logger.info(f"Added {len(selected_tracks)} tracks to playlist in mode: {mode}")
+        return jsonify({"message": f"{len(selected_tracks)} tracks added to playlist successfully"}), 200
+    except Exception as e:
+        logger.error(f"Failed to add tracks to playlist: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Failed to add tracks to playlist: {str(e)}"}), 500
+
+
 @app.route('/api/v1/playback/random/album', methods=['POST'])
 def play_random_album():
     connect_mpd()
@@ -405,4 +469,3 @@ def set_current_track_rating():
 # ── Run Application ────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     app.run(host=APP_HOST, port=APP_PORT)
-
