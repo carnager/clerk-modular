@@ -16,7 +16,7 @@ conf_path = os.path.join(conf_dir, 'clerk-api-rofi.conf') # New config file name
 DEFAULT_CONFIG = {
     'general': {
         'menu_prompt': 'Clerk-API',
-        'menu_tool': ['rofi', '-dmenu', '-i', '-p', 'PLACEHOLDER'],
+        'menu_tool': ['rofi', '-dmenu', '-i', '-multi-select', '-p', 'PLACEHOLDER'],
         'api_base_url': 'http://localhost:5000/api/v1' # New: Base URL for your Flask API
     },
     'columns': {
