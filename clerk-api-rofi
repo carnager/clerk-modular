@@ -213,15 +213,27 @@ def add_album(mode_filter):
         return # done rating
 
     # Add/Insert/Replace to playlist via API
-    # This block also correctly uses selected_ids now.
-    for album_id in selected_ids:
-        # Pass the original mode_filter as 'list_mode' to the API
-        payload = {'mode': action.lower(), 'list_mode': mode_filter}
-        response = make_api_request('POST', f'playlist/add/album/{album_id}', json_data=payload)
+    # Use bulk endpoint for multiple selections
+    if len(selected_ids) > 1:
+        payload = {
+            'album_ids': selected_ids,
+            'mode': action.lower(),
+            'list_mode': mode_filter
+        }
+        response = make_api_request('POST', 'playlist/add/albums', json_data=payload)
         if response and response.get('message'):
-            print(f"Album ID {album_id} added to playlist ({action.lower()}).")
+            print(f"{len(selected_ids)} albums added to playlist ({action.lower()}).")
         else:
-            print(f"Failed to add album ID {album_id} to playlist.")
+            print(f"Failed to add albums to playlist.")
+    else:
+        # Single album - use existing endpoint
+        for album_id in selected_ids:
+            payload = {'mode': action.lower(), 'list_mode': mode_filter}
+            response = make_api_request('POST', f'playlist/add/album/{album_id}', json_data=payload)
+            if response and response.get('message'):
+                print(f"Album ID {album_id} added to playlist ({action.lower()}).")
+            else:
+                print(f"Failed to add album ID {album_id} to playlist.")
 
 
 def add_track():
@@ -263,12 +275,25 @@ def add_track():
         return # Exit after handling rating actions
 
     # Add/Insert/Replace to playlist via API
-    for track_id in selected_ids:
-        response = make_api_request('POST', f'playlist/add/track/{track_id}', json_data={'mode': action.lower()})
+    # Use bulk endpoint for multiple selections
+    if len(selected_ids) > 1:
+        payload = {
+            'track_ids': selected_ids,
+            'mode': action.lower()
+        }
+        response = make_api_request('POST', 'playlist/add/tracks', json_data=payload)
         if response and response.get('message'):
-            print(f"Track ID {track_id} added to playlist ({action.lower()}).")
+            print(f"{len(selected_ids)} tracks added to playlist ({action.lower()}).")
         else:
-            print(f"Failed to add track ID {track_id} to playlist.")
+            print(f"Failed to add tracks to playlist.")
+    else:
+        # Single track - use existing endpoint
+        for track_id in selected_ids:
+            response = make_api_request('POST', f'playlist/add/track/{track_id}', json_data={'mode': action.lower()})
+            if response and response.get('message'):
+                print(f"Track ID {track_id} added to playlist ({action.lower()}).")
+            else:
+                print(f"Failed to add track ID {track_id} to playlist.")
 
 def random_album_ui():
     response = make_api_request('POST', 'playback/random/album')
@@ -416,4 +441,3 @@ if __name__ == "__main__":
         print(help_txt)
 
     sys.exit(0)
-
