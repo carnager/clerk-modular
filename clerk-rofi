@@ -4,7 +4,6 @@
 # dependencies = [
 #     "msgpack",
 #     "python-mpd2",
-#     "requests",
 #     "toml",
 # ]
 # ///
