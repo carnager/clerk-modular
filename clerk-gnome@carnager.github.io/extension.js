@@ -358,8 +358,10 @@ class ClerkUI {
             if (listMode === 'albums') listMode = 'album';
             
             const response = await this._makeApiRequest(`playlist/add/album/${albumId}`, 'POST', {mode: mode, list_mode: listMode});
-            const albumName = this._getAlbumNameById(albumId) || `ID ${albumId}`;
-            this._showNotification(`Album "${albumName}" ${mode}ed to playlist`);
+            const albumInfo = this._getAlbumInfoById(albumId);
+            const artist = albumInfo?.albumartist || albumInfo?.artist || 'Unknown Artist';
+            const albumName = albumInfo?.album || `ID ${albumId}`;
+            this._showNotification(`${artist} - ${albumName} ${mode}ed to playlist`);
         } catch (error) {
             this._showNotification(`Failed to ${mode} album: ${error.message}`);
         }
@@ -368,7 +370,10 @@ class ClerkUI {
     async _performTrackAction(trackId, mode) {
         try {
             const response = await this._makeApiRequest(`playlist/add/track/${trackId}`, 'POST', {mode: mode});
-            this._showNotification(`Track ${trackId} ${mode}ed to playlist`);
+            const trackInfo = this._getTrackInfoById(trackId);
+            const artist = trackInfo?.artist || 'Unknown Artist';
+            const album = trackInfo?.album || 'Unknown Album';
+            this._showNotification(`${artist} - ${album} ${mode}ed to playlist`);
         } catch (error) {
             this._showNotification(`Failed to ${mode} track: ${error.message}`);
         }
@@ -392,7 +397,6 @@ class ClerkUI {
     async performRandomAlbum() {
         try {
             await this._makeApiRequest('playback/random/album', 'POST');
-            this._showNotification('Random album started');
         } catch (error) {
             this._showNotification(`Failed to start random album: ${error.message}`);
         }
@@ -401,7 +405,18 @@ class ClerkUI {
     async performRandomTracks() {
         try {
             await this._makeApiRequest('playback/random/tracks', 'POST');
-            this._showNotification('Random tracks started');
+            
+            // Get current playing track info to show artist and album
+            try {
+                const currentTrack = await this._makeApiRequest('playback/current');
+                if (currentTrack && currentTrack.artist && currentTrack.album) {
+                    this._showNotification(`Playing random tracks: ${currentTrack.artist} - ${currentTrack.album}`);
+                } else {
+                    this._showNotification('Random tracks started');
+                }
+            } catch (infoError) {
+                this._showNotification('Random tracks started');
+            }
         } catch (error) {
             this._showNotification(`Failed to start random tracks: ${error.message}`);
         }
@@ -420,6 +435,20 @@ class ClerkUI {
         if (this._current_data) {
             const album = this._current_data.find(item => item.id == albumId);
             return album ? album.album : null;
+        }
+        return null;
+    }
+
+    _getAlbumInfoById(albumId) {
+        if (this._current_data) {
+            return this._current_data.find(item => item.id == albumId);
+        }
+        return null;
+    }
+
+    _getTrackInfoById(trackId) {
+        if (this._current_data) {
+            return this._current_data.find(item => item.id == trackId);
         }
         return null;
     }
