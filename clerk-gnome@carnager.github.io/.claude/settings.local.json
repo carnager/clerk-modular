@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(glib-compile-schemas:*)"
+    ],
+    "deny": []
+  }
+}

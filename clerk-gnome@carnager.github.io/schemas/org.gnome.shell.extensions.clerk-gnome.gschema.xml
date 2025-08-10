@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.clerk-gnome" path="/org/gnome/shell/extensions/clerk-gnome/">
+    
+    <key name="show-albums" type="as">
+      <default>['&lt;Super&gt;F2']</default>
+      <summary>Show Albums</summary>
+      <description>Keybinding to show albums</description>
+    </key>
+    
+    <key name="show-latest-albums" type="as">
+      <default>['&lt;Super&gt;F3']</default>
+      <summary>Show Latest Albums</summary>
+      <description>Keybinding to show latest albums</description>
+    </key>
+    
+    <key name="show-tracks" type="as">
+      <default>['&lt;Super&gt;F1']</default>
+      <summary>Show Tracks</summary>
+      <description>Keybinding to show tracks</description>
+    </key>
+    
+    <key name="random-album" type="as">
+      <default>['&lt;Super&gt;F4']</default>
+      <summary>Random Album</summary>
+      <description>Keybinding to play random album</description>
+    </key>
+    
+    <key name="random-tracks" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;F4']</default>
+      <summary>Random Tracks</summary>
+      <description>Keybinding to play random tracks</description>
+    </key>
+    
+    <key name="cache-update" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;u']</default>
+      <summary>Update Cache</summary>
+      <description>Keybinding to update clerk cache</description>
+    </key>
+    
+  </schema>
+</schemalist>

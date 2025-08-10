@@ -1,0 +1,9 @@
+{
+    "uuid": "clerk-gnome@carnager.github.io",
+    "name": "Clerk GNOME",
+    "description": "Direct integration between Clerk music library and GNOME Shell",
+    "version": 1,
+    "shell-version": ["45", "46", "47", "48"],
+    "url": "https://github.com/carnager/clerk",
+    "settings-schema": "org.gnome.shell.extensions.clerk-gnome"
+}
