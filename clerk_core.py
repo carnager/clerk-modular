@@ -358,6 +358,29 @@ def create_cache(mpd_client):
         seen_albums_for_main_list = set() # For 'albums' list deduplication
         track_id_counter = 0
 
+        # Helper to check hashability and emit a precise diagnostic when we see
+        # types that cannot be used as dict/set keys (e.g., lists from MPD tags)
+        def _is_hashable(x):
+            try:
+                hash(x)
+                return True
+            except TypeError:
+                return False
+
+        def _diagnose_unhashable(track_file, album_artist, album, date):
+            def d(name, val):
+                return f"{name} type={type(val).__name__} value={val!r}"
+            print(
+                "Core Error: Unhashable tag value encountered while processing file '"
+                + str(track_file)
+                + "' — "
+                + ", ".join([
+                    d('albumartist/artist', album_artist),
+                    d('album', album),
+                    d('date', date),
+                ])
+            )
+
         # Pass 1: Populate 'albums' and 'tracks' lists in original MPD-returned order
         for song in all_songs_collected_raw: # Iterate through songs in their original order
             album_artist_for_key = song.get('albumartist')
@@ -371,6 +394,17 @@ def create_cache(mpd_client):
 
             if not album_artist_for_key or not album_name or not album_date or not track_file:
                 continue
+
+            # Proactively detect and log unhashable tag types before using them as
+            # components of a dict/set key. This helps pinpoint the offending file & tag.
+            if not (_is_hashable(album_artist_for_key) and _is_hashable(album_name) and _is_hashable(album_date)):
+                _diagnose_unhashable(track_file, album_artist_for_key, album_name, album_date)
+                # Re-raise with context so the outer handler prints a meaningful message
+                raise TypeError(
+                    f"Unhashable tag type for file '{track_file}': "
+                    f"albumartist/artist={type(album_artist_for_key).__name__}, "
+                    f"album={type(album_name).__name__}, date={type(album_date).__name__}"
+                )
 
             album_key_tuple = (album_artist_for_key, album_name, album_date)
             
@@ -525,4 +559,3 @@ if __name__ == "__main__":
         mpd.disconnect()
     except Exception as e:
         print(f"Core Test Error: {e}")
-

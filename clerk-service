@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "flask",
-#     "msgpack",
-#     "python-mpd2",
-#     "toml",
-# ]
-# ///
 import os
 import sys
 import logging
@@ -34,6 +25,11 @@ mpd_host   = os.environ.get('MPD_HOST', core_config['general']['mpd_host'])
 # ── Logging Setup ──────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("clerk-web")
+logger.info("Starting Clerk Web service")
+logger.info(f"Public dir: {PUBLIC_DIR}")
+logger.info(f"Config path: {conf_path}")
+logger.info(f"MPD host: {mpd_host}")
+logger.info(f"Bind: {APP_HOST}:{APP_PORT}")
 
 # ── MPD Client Setup ───────────────────────────────────────────────────────────
 mpd = MPDClient()
@@ -61,10 +57,15 @@ except Exception as e:
     sys.exit(1)
 
 # ── Ensure caches exist and load ratings ────────────────────────────────────────
+logger.info("Initializing core caches (albums/tracks/latest/ratings)...")
 if not core.check_update(mpd):
     logger.critical("Core cache initialization failed")
     sys.exit(1)
 core.load_ratings_cache()
+try:
+    logger.info(f"Ratings cache entries: {len(core.album_ratings)}")
+except Exception:
+    logger.info("Ratings cache entries: unknown (failed to read length)")
 
 # ── Flask App Initialization ──────────────────────────────────────────────────
 app = Flask(
@@ -477,4 +478,4 @@ def set_current_track_rating():
 
 # ── Run Application ────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    app.run(host=APP_HOST, port=APP_PORT)
+    app.run(host=APP_HOST, port=6601)
