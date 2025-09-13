@@ -7,9 +7,17 @@ import random
 import subprocess
 from mpd import MPDClient, MPDError
 import toml
+import re
 
 # --- Global Cache Data ---
 album_ratings = {}
+
+# Debug flag controlled by environment
+CLERK_DEBUG = str(os.environ.get('CLERK_DEBUG', '')).lower() in ('1', 'true', 'yes', 'on')
+
+def _debug(msg: str):
+    if CLERK_DEBUG:
+        print(msg)
 
 # --- XDG Paths ---
 xdg_data = os.environ.get('XDG_DATA_HOME', os.path.join(os.environ.get('HOME', ''), ".local", "share"))
@@ -56,6 +64,26 @@ def load_core_config():
 core_config = load_core_config()
 
 # --- Helper Functions ---
+def parse_number_tag(val):
+    """Extract an integer from MPD numeric-like tags.
+    - Accepts list (take first), strings like '02' or '2/12', or ints.
+    - Returns int or None if not present/parsable.
+    """
+    # Unwrap lists (MPD can sometimes return lists for tags)
+    if isinstance(val, list):
+        val = val[0] if val else None
+    if val is None:
+        return None
+    # Already a proper int
+    if isinstance(val, int):
+        return val
+    # Convert to string and take the part before '/'
+    s = str(val)
+    if '/' in s:
+        s = s.split('/', 1)[0]
+    # Extract first sequence of digits
+    m = re.search(r"\d+", s)
+    return int(m.group(0)) if m else None
 def add_album_to_playlist(mpd_client, album_data_list, mode="add"):
     """
     Add/insert/replace album(s) in MPD playlist.
@@ -72,6 +100,16 @@ def add_album_to_playlist(mpd_client, album_data_list, mode="add"):
             pos = None
     for album in album_data_list:
         tracks = mpd_client.find('albumartist', album['albumartist'], 'album', album['album'], 'date', album['date'])
+        # Sort tracks by discnumber, then tracknumber for consistent album order
+        def sort_key(t):
+            disc = parse_number_tag(t.get('disc') or t.get('discnumber')) or 0
+            tn = parse_number_tag(t.get('track')) or 0
+            return (disc, tn, t.get('title', ''))
+        try:
+            tracks.sort(key=sort_key)
+        except Exception:
+            # Fallback silently if anything odd pops up; MPD order will be used
+            pass
         for track in tracks:
             try:
                 if pos is not None:
@@ -358,28 +396,26 @@ def create_cache(mpd_client):
         seen_albums_for_main_list = set() # For 'albums' list deduplication
         track_id_counter = 0
 
-        # Helper to check hashability and emit a precise diagnostic when we see
-        # types that cannot be used as dict/set keys (e.g., lists from MPD tags)
-        def _is_hashable(x):
-            try:
-                hash(x)
-                return True
-            except TypeError:
-                return False
+        # Normalize MPD tag values to hashable scalars and log any conversions.
+        def _normalize_tag(val, tag_name, track_file):
+            if isinstance(val, list):
+                chosen = val[0] if val else ""
+                _debug(
+                    f"Core Info: Normalizing {tag_name} list for file '{track_file}': {val!r} -> {chosen!r}"
+                )
+                return chosen
+            return val
 
-        def _diagnose_unhashable(track_file, album_artist, album, date):
-            def d(name, val):
-                return f"{name} type={type(val).__name__} value={val!r}"
-            print(
-                "Core Error: Unhashable tag value encountered while processing file '"
-                + str(track_file)
-                + "' — "
-                + ", ".join([
-                    d('albumartist/artist', album_artist),
-                    d('album', album),
-                    d('date', date),
-                ])
-            )
+        def _ensure_hashable(val, tag_name, track_file):
+            try:
+                hash(val)
+                return val
+            except TypeError:
+                converted = str(val)
+                _debug(
+                    f"Core Warning: Converting unhashable {tag_name} for file '{track_file}' to string: {val!r} -> {converted!r}"
+                )
+                return converted
 
         # Pass 1: Populate 'albums' and 'tracks' lists in original MPD-returned order
         for song in all_songs_collected_raw: # Iterate through songs in their original order
@@ -395,16 +431,19 @@ def create_cache(mpd_client):
             if not album_artist_for_key or not album_name or not album_date or not track_file:
                 continue
 
-            # Proactively detect and log unhashable tag types before using them as
-            # components of a dict/set key. This helps pinpoint the offending file & tag.
-            if not (_is_hashable(album_artist_for_key) and _is_hashable(album_name) and _is_hashable(album_date)):
-                _diagnose_unhashable(track_file, album_artist_for_key, album_name, album_date)
-                # Re-raise with context so the outer handler prints a meaningful message
-                raise TypeError(
-                    f"Unhashable tag type for file '{track_file}': "
-                    f"albumartist/artist={type(album_artist_for_key).__name__}, "
-                    f"album={type(album_name).__name__}, date={type(album_date).__name__}"
-                )
+            # Normalize and ensure hashable values to safely use as dict/set keys
+            album_artist_for_key = _ensure_hashable(
+                _normalize_tag(album_artist_for_key, 'albumartist/artist', track_file),
+                'albumartist/artist', track_file
+            )
+            album_name = _ensure_hashable(
+                _normalize_tag(album_name, 'album', track_file),
+                'album', track_file
+            )
+            album_date = _ensure_hashable(
+                _normalize_tag(album_date, 'date', track_file),
+                'date', track_file
+            )
 
             album_key_tuple = (album_artist_for_key, album_name, album_date)
             
@@ -419,8 +458,12 @@ def create_cache(mpd_client):
                 })
             
             # Populate the 'tracks' list (all individual songs)
+            track_num = parse_number_tag(song.get('track', ''))
+            disc_num = parse_number_tag(song.get('disc') or song.get('discnumber'))
             tracks.append({
                 'track': song.get('track', ''),
+                'tracknumber': track_num,   # normalized integer when available
+                'discnumber': disc_num,     # normalized integer when available
                 'title': song.get('title', ''),
                 'artist': song.get('artist'),
                 'album': album_name,
