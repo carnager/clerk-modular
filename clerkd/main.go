@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -26,21 +25,26 @@ const (
 )
 
 type config struct {
-	General struct {
-		MPDHost        string   `toml:"mpd_host"`
-		NumberOfTracks int      `toml:"number_of_tracks"`
-		CacheBatchSize int      `toml:"cache_batch_size"`
-		RandomArtist   string   `toml:"random_artist"`
-		SyncOnlineList bool     `toml:"sync_online_list"`
-		SyncCommand    []string `toml:"sync_command"`
-	} `toml:"general"`
+	Server struct {
+		Host string `toml:"host"`
+		Port int    `toml:"port"`
+	} `toml:"server"`
+	MPD struct {
+		Address string `toml:"address"`
+	} `toml:"mpd"`
+	Random struct {
+		Tracks    int    `toml:"tracks"`
+		ArtistTag string `toml:"artist_tag"`
+	} `toml:"random"`
+	Cache struct {
+		BatchSize int `toml:"batch_size"`
+	} `toml:"cache"`
 }
 
 type paths struct {
-	DataDir        string
-	ConfigPath     string
-	LegacyConfigPath string
-	AlbumCacheFile string
+	DataDir          string
+	ConfigPath       string
+	AlbumCacheFile   string
 	TracksCacheFile  string
 	LatestCacheFile  string
 	RatingsCacheFile string
@@ -60,13 +64,10 @@ func main() {
 		logger.Fatalf("load config: %v", err)
 	}
 
-	host := getenvDefault("CLERK_WEB_HOST", defaultHost)
-	port := getenvIntDefault("CLERK_WEB_PORT", defaultPort)
-
 	a := &app{
 		cfg:    cfg,
 		paths:  pathCfg,
-		addr:   fmt.Sprintf("%s:%d", host, port),
+		addr:   fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		logger: logger,
 	}
 
@@ -90,8 +91,7 @@ func loadConfig() (config, paths, error) {
 
 	pathCfg := paths{
 		DataDir:          filepath.Join(xdgData, "clerk"),
-		ConfigPath:       filepath.Join(xdgConfig, "clerk", "clerkd.conf"),
-		LegacyConfigPath: filepath.Join(xdgConfig, "clerk", "clerk-core.conf"),
+		ConfigPath:       filepath.Join(xdgConfig, "clerk", "clerkd.toml"),
 		AlbumCacheFile:   filepath.Join(xdgData, "clerk", "album.cache"),
 		TracksCacheFile:  filepath.Join(xdgData, "clerk", "tracks.cache"),
 		LatestCacheFile:  filepath.Join(xdgData, "clerk", "latest.cache"),
@@ -106,9 +106,7 @@ func loadConfig() (config, paths, error) {
 	}
 
 	if _, err := os.Stat(pathCfg.ConfigPath); errors.Is(err, os.ErrNotExist) {
-		if _, legacyErr := os.Stat(pathCfg.LegacyConfigPath); legacyErr == nil {
-			pathCfg.ConfigPath = pathCfg.LegacyConfigPath
-		} else if err := os.WriteFile(pathCfg.ConfigPath, []byte(defaultCoreConfig()), 0o644); err != nil {
+		if err := os.WriteFile(pathCfg.ConfigPath, []byte(defaultDaemonConfig()), 0o644); err != nil {
 			return config{}, paths{}, err
 		}
 	}
@@ -118,40 +116,65 @@ func loadConfig() (config, paths, error) {
 		return config{}, paths{}, err
 	}
 	var cfg config
-	general, _ := raw["general"].(map[string]any)
-	cfg.General.MPDHost = stringify(general["mpd_host"])
-	cfg.General.NumberOfTracks = intFromAny(general["number_of_tracks"], 20)
-	cfg.General.CacheBatchSize = intFromAny(general["cache_batch_size"], 10000)
-	cfg.General.RandomArtist = stringify(general["random_artist"])
-	cfg.General.SyncOnlineList = boolFromAny(general["sync_online_list"], false)
-	cfg.General.SyncCommand = stringSlice(general["sync_command"])
-	if cfg.General.MPDHost == "" {
-		cfg.General.MPDHost = "localhost"
-	}
-	if envHost := os.Getenv("MPD_HOST"); envHost != "" {
-		cfg.General.MPDHost = envHost
-	}
-	if cfg.General.NumberOfTracks <= 0 {
-		cfg.General.NumberOfTracks = 20
-	}
-	if cfg.General.CacheBatchSize <= 0 {
-		cfg.General.CacheBatchSize = 10000
-	}
-	if cfg.General.RandomArtist == "" {
-		cfg.General.RandomArtist = "albumartist"
-	}
+	server, _ := raw["server"].(map[string]any)
+	mpdSection, _ := raw["mpd"].(map[string]any)
+	random, _ := raw["random"].(map[string]any)
+	cache, _ := raw["cache"].(map[string]any)
+	cfg.Server.Host = stringify(server["host"])
+	cfg.Server.Port = intFromAny(server["port"], defaultPort)
+	cfg.MPD.Address = stringify(mpdSection["address"])
+	cfg.Random.Tracks = intFromAny(random["tracks"], 20)
+	cfg.Random.ArtistTag = stringify(random["artist_tag"])
+	cfg.Cache.BatchSize = intFromAny(cache["batch_size"], 10000)
+	applyDefaults(&cfg)
 	return cfg, pathCfg, nil
 }
 
-func defaultCoreConfig() string {
-	return `[general]
-mpd_host = "localhost"
-number_of_tracks = 20
-cache_batch_size = 10000
-random_artist = "albumartist"
-sync_online_list = true
-sync_command = ["clerk-musiclist"]
+func defaultDaemonConfig() string {
+	return `[server]
+host = "0.0.0.0"
+port = 6601
+
+[mpd]
+address = "localhost"
+
+[random]
+tracks = 20
+artist_tag = "albumartist"
+
+[cache]
+batch_size = 10000
 `
+}
+
+func applyDefaults(cfg *config) {
+	if cfg.Server.Host == "" {
+		cfg.Server.Host = defaultHost
+	}
+	if cfg.Server.Port <= 0 {
+		cfg.Server.Port = defaultPort
+	}
+	if cfg.MPD.Address == "" {
+		cfg.MPD.Address = "localhost"
+	}
+	if cfg.Random.Tracks <= 0 {
+		cfg.Random.Tracks = 20
+	}
+	if cfg.Random.ArtistTag == "" {
+		cfg.Random.ArtistTag = "albumartist"
+	}
+	if cfg.Cache.BatchSize <= 0 {
+		cfg.Cache.BatchSize = 10000
+	}
+	if envHost := os.Getenv("CLERKD_HOST"); envHost != "" {
+		cfg.Server.Host = envHost
+	}
+	if envPort := os.Getenv("CLERKD_PORT"); envPort != "" {
+		cfg.Server.Port = intFromAny(envPort, cfg.Server.Port)
+	}
+	if envMPDAddress := os.Getenv("CLERKD_MPD_ADDRESS"); envMPDAddress != "" {
+		cfg.MPD.Address = envMPDAddress
+	}
 }
 
 func (a *app) routes() http.Handler {
@@ -506,7 +529,7 @@ func (a *app) handleRandomAlbum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer client.Close()
-	if err := randomAlbum(client, a.cfg.General.RandomArtist); err != nil {
+	if err := randomAlbum(client, a.cfg.Random.ArtistTag); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -520,7 +543,7 @@ func (a *app) handleRandomTracks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer client.Close()
-	if err := randomTracks(client, a.cfg.General.RandomArtist, a.cfg.General.NumberOfTracks); err != nil {
+	if err := randomTracks(client, a.cfg.Random.ArtistTag, a.cfg.Random.Tracks); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -696,7 +719,7 @@ func (a *app) handleCurrentTrackRatingPost(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *app) dialMPD() (*mpd.Client, error) {
-	client, err := mpd.Dial("tcp", mpdAddress(a.cfg.General.MPDHost))
+	client, err := mpd.Dial("tcp", mpdAddress(a.cfg.MPD.Address))
 	if err != nil {
 		return nil, err
 	}
@@ -841,10 +864,6 @@ func (a *app) updateAlbumRating(album map[string]any, rating string) (bool, erro
 	}
 	if err := a.saveRatings(ratings); err != nil {
 		return false, err
-	}
-	if a.cfg.General.SyncOnlineList && len(a.cfg.General.SyncCommand) > 0 {
-		cmd := exec.Command(a.cfg.General.SyncCommand[0], a.cfg.General.SyncCommand[1:]...)
-		_ = cmd.Run()
 	}
 	return true, nil
 }

@@ -21,23 +21,27 @@ import (
 const defaultLocalAPIBaseURL = "http://localhost:6601/api/v1"
 
 type config struct {
-	General struct {
-		MenuPrompt           string   `toml:"menu_prompt"`
-		MenuTool             []string `toml:"menu_tool"`
-		APIBaseURL           string   `toml:"api_base_url"`
-		AutoStartLocalDaemon bool     `toml:"auto_start_local_daemon"`
-		LocalServiceUnit     string   `toml:"local_service_unit"`
-		LocalServiceCommand  []string `toml:"local_service_command"`
-		StartupTimeout       float64  `toml:"startup_timeout_seconds"`
-	} `toml:"general"`
+	API struct {
+		BaseURL string `toml:"base_url"`
+	} `toml:"api"`
+	Autostart struct {
+		Enabled        bool     `toml:"enabled"`
+		SystemdUnit    string   `toml:"systemd_unit"`
+		Command        []string `toml:"command"`
+		TimeoutSeconds float64  `toml:"timeout_seconds"`
+	} `toml:"autostart"`
+	UI struct {
+		Prompt string   `toml:"prompt"`
+		Menu   []string `toml:"menu"`
+	} `toml:"ui"`
 	Columns struct {
-		ArtistWidth      int `toml:"artist_width"`
-		AlbumArtistWidth int `toml:"albumartist_width"`
-		DateWidth        int `toml:"date_width"`
-		AlbumWidth       int `toml:"album_width"`
-		IDWidth          int `toml:"id_width"`
-		TitleWidth       int `toml:"title_width"`
-		TrackWidth       int `toml:"track_width"`
+		Artist      int `toml:"artist"`
+		AlbumArtist int `toml:"album_artist"`
+		Date        int `toml:"date"`
+		Album       int `toml:"album"`
+		ID          int `toml:"id"`
+		Title       int `toml:"title"`
+		Track       int `toml:"track"`
 	} `toml:"columns"`
 }
 
@@ -108,7 +112,10 @@ func main() {
 		return
 	}
 	if *optRegen {
-		fmt.Printf("To regenerate %s, delete the file manually.\n", cfgPath)
+		if err := os.WriteFile(cfgPath, []byte(defaultConfigText()), 0o644); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("Wrote default config to %s\n", cfgPath)
 		return
 	}
 
@@ -161,7 +168,7 @@ func loadConfig() (config, string, error) {
 	}
 	xdgConfig := getenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	confDir := filepath.Join(xdgConfig, "clerk")
-	confPath := filepath.Join(confDir, "clerk-rofi.conf")
+	confPath := filepath.Join(confDir, "clerk-rofi.toml")
 	if err := os.MkdirAll(confDir, 0o755); err != nil {
 		return config{}, "", err
 	}
@@ -176,93 +183,99 @@ func loadConfig() (config, string, error) {
 		return config{}, "", err
 	}
 	var cfg config
-	general, _ := raw["general"].(map[string]any)
+	api, _ := raw["api"].(map[string]any)
+	autostart, _ := raw["autostart"].(map[string]any)
+	ui, _ := raw["ui"].(map[string]any)
 	columns, _ := raw["columns"].(map[string]any)
-	cfg.General.MenuPrompt = stringify(general["menu_prompt"])
-	cfg.General.MenuTool = stringSlice(general["menu_tool"])
-	cfg.General.APIBaseURL = stringify(general["api_base_url"])
-	cfg.General.AutoStartLocalDaemon = boolFromAny(general["auto_start_local_daemon"], true)
-	cfg.General.LocalServiceUnit = stringify(general["local_service_unit"])
-	cfg.General.LocalServiceCommand = stringSlice(general["local_service_command"])
-	cfg.General.StartupTimeout = floatFromAny(general["startup_timeout_seconds"], 5.0)
-	cfg.Columns.ArtistWidth = intFromAny(columns["artist_width"], 30)
-	cfg.Columns.AlbumArtistWidth = intFromAny(columns["albumartist_width"], 30)
-	cfg.Columns.DateWidth = intFromAny(columns["date_width"], 6)
-	cfg.Columns.AlbumWidth = intFromAny(columns["album_width"], 40)
-	cfg.Columns.IDWidth = intFromAny(columns["id_width"], 5)
-	cfg.Columns.TitleWidth = intFromAny(columns["title_width"], 40)
-	cfg.Columns.TrackWidth = intFromAny(columns["track_width"], 5)
+	cfg.API.BaseURL = stringify(api["base_url"])
+	cfg.Autostart.Enabled = boolFromAny(autostart["enabled"], true)
+	cfg.Autostart.SystemdUnit = stringify(autostart["systemd_unit"])
+	cfg.Autostart.Command = stringSlice(autostart["command"])
+	cfg.Autostart.TimeoutSeconds = floatFromAny(autostart["timeout_seconds"], 5.0)
+	cfg.UI.Prompt = stringify(ui["prompt"])
+	cfg.UI.Menu = stringSlice(ui["menu"])
+	cfg.Columns.Artist = intFromAny(columns["artist"], 30)
+	cfg.Columns.AlbumArtist = intFromAny(columns["album_artist"], 30)
+	cfg.Columns.Date = intFromAny(columns["date"], 6)
+	cfg.Columns.Album = intFromAny(columns["album"], 40)
+	cfg.Columns.ID = intFromAny(columns["id"], 5)
+	cfg.Columns.Title = intFromAny(columns["title"], 40)
+	cfg.Columns.Track = intFromAny(columns["track"], 5)
 	applyDefaults(&cfg)
 	return cfg, confPath, nil
 }
 
 func defaultConfigText() string {
-	return `[general]
-menu_prompt = "Clerk"
-menu_tool = ["rofi", "-dmenu", "-p", "PLACEHOLDER"]
-api_base_url = "http://localhost:6601/api/v1"
-auto_start_local_daemon = true
-local_service_unit = "clerkd.service"
-local_service_command = []
-startup_timeout_seconds = 5.0
+	return `[api]
+base_url = "http://localhost:6601/api/v1"
+
+[autostart]
+enabled = true
+systemd_unit = "clerkd.service"
+command = ["clerkd"]
+timeout_seconds = 5.0
+
+[ui]
+prompt = "Clerk"
+menu = ["rofi", "-dmenu", "-p", "PLACEHOLDER"]
 
 [columns]
-artist_width = 30
-albumartist_width = 30
-date_width = 6
-album_width = 40
-id_width = 5
-title_width = 40
-track_width = 5
+artist = 30
+album_artist = 30
+date = 6
+album = 40
+id = 5
+title = 40
+track = 5
 `
 }
 
 func applyDefaults(cfg *config) {
-	if cfg.General.MenuPrompt == "" {
-		cfg.General.MenuPrompt = "Clerk"
+	if cfg.API.BaseURL == "" {
+		cfg.API.BaseURL = defaultLocalAPIBaseURL
 	}
-	if len(cfg.General.MenuTool) == 0 {
-		cfg.General.MenuTool = []string{"rofi", "-dmenu", "-p", "PLACEHOLDER"}
+	if cfg.Autostart.SystemdUnit == "" {
+		cfg.Autostart.SystemdUnit = "clerkd.service"
 	}
-	if cfg.General.APIBaseURL == "" {
-		cfg.General.APIBaseURL = defaultLocalAPIBaseURL
+	if cfg.Autostart.TimeoutSeconds <= 0 {
+		cfg.Autostart.TimeoutSeconds = 5
 	}
-	if cfg.General.LocalServiceUnit == "" {
-		cfg.General.LocalServiceUnit = "clerkd.service"
+	if len(cfg.Autostart.Command) == 0 {
+		cfg.Autostart.Command = []string{"clerkd"}
 	}
-	if cfg.General.StartupTimeout <= 0 {
-		cfg.General.StartupTimeout = 5
+	if cfg.UI.Prompt == "" {
+		cfg.UI.Prompt = "Clerk"
 	}
-	if len(cfg.General.LocalServiceCommand) == 0 {
-		cfg.General.LocalServiceCommand = []string{"clerkd"}
+	if len(cfg.UI.Menu) == 0 {
+		cfg.UI.Menu = []string{"rofi", "-dmenu", "-p", "PLACEHOLDER"}
 	}
-	if cfg.Columns.ArtistWidth == 0 {
-		cfg.Columns.ArtistWidth = 30
+	if cfg.Columns.Artist == 0 {
+		cfg.Columns.Artist = 30
 	}
-	if cfg.Columns.AlbumArtistWidth == 0 {
-		cfg.Columns.AlbumArtistWidth = 30
+	if cfg.Columns.AlbumArtist == 0 {
+		cfg.Columns.AlbumArtist = 30
 	}
-	if cfg.Columns.DateWidth == 0 {
-		cfg.Columns.DateWidth = 6
+	if cfg.Columns.Date == 0 {
+		cfg.Columns.Date = 6
 	}
-	if cfg.Columns.AlbumWidth == 0 {
-		cfg.Columns.AlbumWidth = 40
+	if cfg.Columns.Album == 0 {
+		cfg.Columns.Album = 40
 	}
-	if cfg.Columns.IDWidth == 0 {
-		cfg.Columns.IDWidth = 5
+	if cfg.Columns.ID == 0 {
+		cfg.Columns.ID = 5
 	}
-	if cfg.Columns.TitleWidth == 0 {
-		cfg.Columns.TitleWidth = 40
+	if cfg.Columns.Title == 0 {
+		cfg.Columns.Title = 40
 	}
-	if cfg.Columns.TrackWidth == 0 {
-		cfg.Columns.TrackWidth = 5
+	if cfg.Columns.Track == 0 {
+		cfg.Columns.Track = 5
 	}
 }
 
 func resolveAPIBaseURL(cfg config, override string) (string, bool) {
 	base := strings.TrimSpace(override)
 	if base == "" {
-		base = strings.TrimSpace(cfg.General.APIBaseURL)
+		base = strings.TrimSpace(cfg.API.BaseURL)
 	}
 	if base == "" {
 		base = defaultLocalAPIBaseURL
@@ -288,18 +301,18 @@ func helpText(apiBaseURL string, autoStart bool) string {
  -h  Show This Help
 
 Defaults:
- api_base_url = %s
- auto_start_local_daemon = %s
+ api.base_url = %s
+ autostart.enabled = %s
 `, apiBaseURL, auto)
 }
 
 func newAPIClient(cfg config, baseURL string, autoStart bool) *apiClient {
 	return &apiClient{
 		baseURL:              baseURL,
-		autoStartLocalDaemon: autoStart && cfg.General.AutoStartLocalDaemon,
-		localServiceUnit:     cfg.General.LocalServiceUnit,
-		localServiceCommand:  cfg.General.LocalServiceCommand,
-		startupTimeout:       time.Duration(cfg.General.StartupTimeout * float64(time.Second)),
+		autoStartLocalDaemon: autoStart && cfg.Autostart.Enabled,
+		localServiceUnit:     cfg.Autostart.SystemdUnit,
+		localServiceCommand:  cfg.Autostart.Command,
+		startupTimeout:       time.Duration(cfg.Autostart.TimeoutSeconds * float64(time.Second)),
 		httpClient:           &http.Client{Timeout: 10 * time.Second},
 	}
 }
@@ -435,11 +448,11 @@ func addAlbumUI(cfg config, client *apiClient, mode string) error {
 	for _, album := range albums {
 		lines = append(lines, formatAlbumLine(cfg, album))
 	}
-	selectedIDs, err := runMenu(cfg, lines, true, cfg.General.MenuPrompt)
+	selectedIDs, err := runMenu(cfg, lines, true, cfg.UI.Prompt)
 	if err != nil || len(selectedIDs) == 0 {
 		return err
 	}
-	action, err := runSingleMenu(cfg, []string{"Add", "Insert", "Replace", "Rate"}, cfg.General.MenuPrompt)
+	action, err := runSingleMenu(cfg, []string{"Add", "Insert", "Replace", "Rate"}, cfg.UI.Prompt)
 	if err != nil || action == "" {
 		return err
 	}
@@ -483,11 +496,11 @@ func addTrackUI(cfg config, client *apiClient) error {
 	for _, track := range tracks {
 		lines = append(lines, formatTrackLine(cfg, track))
 	}
-	selectedIDs, err := runMenu(cfg, lines, true, cfg.General.MenuPrompt)
+	selectedIDs, err := runMenu(cfg, lines, true, cfg.UI.Prompt)
 	if err != nil || len(selectedIDs) == 0 {
 		return err
 	}
-	action, err := runSingleMenu(cfg, []string{"Add", "Insert", "Replace", "Rate Track (MPD Sticker)"}, cfg.General.MenuPrompt)
+	action, err := runSingleMenu(cfg, []string{"Add", "Insert", "Replace", "Rate Track (MPD Sticker)"}, cfg.UI.Prompt)
 	if err != nil || action == "" {
 		return err
 	}
@@ -517,7 +530,7 @@ func addTrackUI(cfg config, client *apiClient) error {
 }
 
 func currentTrackUI(cfg config, client *apiClient) error {
-	action, err := runSingleMenu(cfg, []string{"Rate Album", "Rate Track (MPD Sticker)"}, cfg.General.MenuPrompt)
+	action, err := runSingleMenu(cfg, []string{"Rate Album", "Rate Track (MPD Sticker)"}, cfg.UI.Prompt)
 	if err != nil || action == "" {
 		return err
 	}
@@ -548,13 +561,13 @@ func currentTrackUI(cfg config, client *apiClient) error {
 }
 
 func runMenu(cfg config, lines []string, trim bool, prompt string) ([]string, error) {
-	cmdArgs := make([]string, len(cfg.General.MenuTool))
-	copy(cmdArgs, cfg.General.MenuTool)
+	cmdArgs := make([]string, len(cfg.UI.Menu))
+	copy(cmdArgs, cfg.UI.Menu)
 	for i, arg := range cmdArgs {
 		cmdArgs[i] = strings.ReplaceAll(arg, "PLACEHOLDER", prompt)
 	}
 	if len(cmdArgs) == 0 {
-		return nil, errors.New("menu_tool is empty")
+		return nil, errors.New("ui.menu is empty")
 	}
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Stderr = io.Discard
@@ -603,7 +616,7 @@ func runSingleMenu(cfg config, lines []string, prompt string) (string, error) {
 }
 
 func inputRating(cfg config, prompt string) (string, error) {
-	result, err := runMenu(cfg, []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "---", "Delete"}, false, prompt+" "+cfg.General.MenuPrompt)
+	result, err := runMenu(cfg, []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "---", "Delete"}, false, prompt+" "+cfg.UI.Prompt)
 	if err != nil || len(result) == 0 || strings.TrimSpace(result[0]) == "" {
 		return "---", err
 	}
@@ -612,22 +625,22 @@ func inputRating(cfg config, prompt string) (string, error) {
 
 func formatAlbumLine(cfg config, a album) string {
 	return fmt.Sprintf("%-*s %-*s %-*s %-*s r=%s",
-		cfg.Columns.AlbumArtistWidth, a.AlbumArtist,
-		cfg.Columns.DateWidth, fallback(a.Date, "0000"),
-		cfg.Columns.AlbumWidth, a.Album,
-		cfg.Columns.IDWidth, a.ID,
+		cfg.Columns.AlbumArtist, a.AlbumArtist,
+		cfg.Columns.Date, fallback(a.Date, "0000"),
+		cfg.Columns.Album, a.Album,
+		cfg.Columns.ID, a.ID,
 		ratingString(a.Rating),
 	)
 }
 
 func formatTrackLine(cfg config, t track) string {
 	return fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s r=%s",
-		cfg.Columns.TrackWidth, trackNumberString(t.Track),
-		cfg.Columns.TitleWidth, t.Title,
-		cfg.Columns.ArtistWidth, t.Artist,
-		cfg.Columns.AlbumWidth, t.Album,
-		cfg.Columns.DateWidth, fallback(t.Date, "0000"),
-		cfg.Columns.IDWidth, t.ID,
+		cfg.Columns.Track, trackNumberString(t.Track),
+		cfg.Columns.Title, t.Title,
+		cfg.Columns.Artist, t.Artist,
+		cfg.Columns.Album, t.Album,
+		cfg.Columns.Date, fallback(t.Date, "0000"),
+		cfg.Columns.ID, t.ID,
 		ratingString(t.Rating),
 	)
 }

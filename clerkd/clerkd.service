@@ -6,8 +6,8 @@ After=network.target
 Type=simple
 ExecStart=/usr/bin/clerkd
 Restart=on-failure
-Environment=CLERK_WEB_HOST=0.0.0.0
-Environment=CLERK_WEB_PORT=6601
+Environment=CLERKD_HOST=0.0.0.0
+Environment=CLERKD_PORT=6601
 
 [Install]
 WantedBy=default.target

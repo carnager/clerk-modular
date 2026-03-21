@@ -10,10 +10,10 @@ Clerk is an API-first MPD queue and rating tool.
 
 ## Configuration
 
-- `~/.config/clerk/clerkd.conf`: daemon configuration
-- `~/.config/clerk/clerk-rofi.conf`: rofi client configuration
+- `~/.config/clerk/clerkd.toml`: daemon configuration
+- `~/.config/clerk/clerk-rofi.toml`: rofi client configuration
 
-`clerkd` will still read `~/.config/clerk/clerk-core.conf` if `clerkd.conf` does not exist yet.
+Both files are created automatically with defaults if they do not exist.
 
 ## Development
 
@@ -45,17 +45,21 @@ go run ./cmd/clerk-musiclist
 
 `clerkd` is API-only.
 
+It does not trigger publishing or export jobs. `clerk-musiclist` is a separate command.
+
 Important environment variables:
 
-- `CLERK_WEB_HOST`
-- `CLERK_WEB_PORT`
-- `MPD_HOST`
+- `CLERKD_HOST`
+- `CLERKD_PORT`
+- `CLERKD_MPD_ADDRESS`
 
 The packaged systemd user unit is [clerkd.service](/home/carnager/clerk-modular/clerkd/clerkd.service).
 
 ## Rofi Client
 
-`clerk-rofi` is API-only. The default `api_base_url` is `http://localhost:6601/api/v1`.
+`clerk-rofi` is API-only. The default `api.base_url` is `http://localhost:6601/api/v1`.
+
+Running `clerk-rofi -x` rewrites `~/.config/clerk/clerk-rofi.toml` with the default config.
 
 When the base URL is the implicit local default, `clerk-rofi` can auto-start the daemon through:
 
