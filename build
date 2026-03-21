@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+
+export GOSUMDB="${GOSUMDB:-off}"
+export GOMODCACHE="${GOMODCACHE:-$SCRIPT_DIR/.gomodcache}"
+export GOCACHE="${GOCACHE:-$SCRIPT_DIR/.gobuild}"
+
+mkdir -p "$SCRIPT_DIR/bin"
+
+go build -o "$SCRIPT_DIR/bin/clerkd" "$SCRIPT_DIR/clerkd"
+go build -o "$SCRIPT_DIR/bin/clerk-rofi" "$SCRIPT_DIR/cmd/clerk-rofi"
+go build -o "$SCRIPT_DIR/bin/clerk-musiclist" "$SCRIPT_DIR/cmd/clerk-musiclist"
