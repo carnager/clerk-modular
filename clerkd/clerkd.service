@@ -1,12 +1,11 @@
 [Unit]
-Description=Clerk Flask Web Service
+Description=Clerk Daemon
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/clerk-service
+ExecStart=/usr/bin/clerkd
 Restart=on-failure
-Environment=FLASK_ENV=production
 Environment=CLERK_WEB_HOST=0.0.0.0
 Environment=CLERK_WEB_PORT=6601
 

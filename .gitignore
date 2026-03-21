@@ -1,0 +1,5 @@
+.gobuild/
+.gomodcache/
+bin/
+__pycache__/
+*.pkg.tar.zst
