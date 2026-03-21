@@ -10,8 +10,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/vmihailenco/msgpack/v5"
 )
+
+type config struct {
+	Upload struct {
+		Host string `toml:"host"`
+		Path string `toml:"path"`
+	} `toml:"upload"`
+	Output struct {
+		TempFile string `toml:"temp_file"`
+	} `toml:"output"`
+}
 
 type exportAlbum struct {
 	ID     string `json:"id"`
@@ -26,6 +37,10 @@ func main() {
 	start := time.Now()
 	logf(start, "Script started. Initializing configuration...")
 
+	cfg, err := loadConfig()
+	if err != nil {
+		fatal(start, err)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fatal(start, err)
@@ -35,10 +50,8 @@ func main() {
 	albumCacheFile := filepath.Join(clerkDataDir, "album.cache")
 	ratingsCacheFile := filepath.Join(clerkDataDir, "ratings.cache")
 
-	syncHost := getenv("CLERK_SYNC_HOST", "proteus")
-	syncPath := getenv("CLERK_SYNC_PATH", "/srv/http/list")
-	syncTargetHTML := filepath.Join(syncHost+":"+syncPath, "index.html")
-	tempHTMLFile := "/tmp/musiclist_albums_only.html"
+	syncTargetHTML := filepath.Join(cfg.Upload.Host+":"+cfg.Upload.Path, "index.html")
+	tempHTMLFile := cfg.Output.TempFile
 
 	logf(start, "Loading data from caches...")
 	albumsRaw, err := readMapSlice(albumCacheFile)
@@ -90,6 +103,59 @@ func main() {
 	}
 	_ = os.Remove(tempHTMLFile)
 	logf(start, "Script finished successfully.")
+}
+
+func loadConfig() (config, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return config{}, err
+	}
+	xdgConfig := getenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	confDir := filepath.Join(xdgConfig, "clerk")
+	confPath := filepath.Join(confDir, "clerk-musiclist.toml")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		return config{}, err
+	}
+	if _, err := os.Stat(confPath); os.IsNotExist(err) {
+		if err := os.WriteFile(confPath, []byte(defaultConfigText()), 0o644); err != nil {
+			return config{}, err
+		}
+	}
+
+	var raw map[string]any
+	if _, err := toml.DecodeFile(confPath, &raw); err != nil {
+		return config{}, err
+	}
+	var cfg config
+	upload, _ := raw["upload"].(map[string]any)
+	output, _ := raw["output"].(map[string]any)
+	cfg.Upload.Host = stringify(upload["host"])
+	cfg.Upload.Path = stringify(upload["path"])
+	cfg.Output.TempFile = stringify(output["temp_file"])
+	applyDefaults(&cfg)
+	return cfg, nil
+}
+
+func defaultConfigText() string {
+	return `[upload]
+host = "proteus"
+path = "/srv/http/list"
+
+[output]
+temp_file = "/tmp/musiclist_albums_only.html"
+`
+}
+
+func applyDefaults(cfg *config) {
+	if cfg.Upload.Host == "" {
+		cfg.Upload.Host = "proteus"
+	}
+	if cfg.Upload.Path == "" {
+		cfg.Upload.Path = "/srv/http/list"
+	}
+	if cfg.Output.TempFile == "" {
+		cfg.Output.TempFile = "/tmp/musiclist_albums_only.html"
+	}
 }
 
 func renderHTML(jsonData string) string {

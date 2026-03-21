@@ -24,8 +24,9 @@ package_clerkd() {
 }
 
 package_clerk-rofi() {
-  pkgdesc="Rofi client for the Clerk daemon"
-  depends=('rofi' 'clerkd')
+  pkgdesc="Rofi client for the Clerk API"
+  depends=('rofi')
+  optdepends=('clerkd: local daemon for localhost auto-start')
   install -Dm755 "$srcdir/clerk-modular/bin/clerk-rofi" \
                   "$pkgdir/usr/bin/clerk-rofi"
 }

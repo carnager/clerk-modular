@@ -56,10 +56,10 @@ type album struct {
 type track struct {
 	ID     string `json:"id"`
 	Track  any    `json:"track"`
-	Title  string `json:"title"`
-	Artist string `json:"artist"`
-	Album  string `json:"album"`
-	Date   string `json:"date"`
+	Title  any    `json:"title"`
+	Artist any    `json:"artist"`
+	Album  any    `json:"album"`
+	Date   any    `json:"date"`
 	Rating any    `json:"rating"`
 }
 
@@ -71,8 +71,8 @@ type currentAlbum struct {
 
 type currentTrack struct {
 	Rating any    `json:"rating"`
-	Title  string `json:"title"`
-	Artist string `json:"artist"`
+	Title  any    `json:"title"`
+	Artist any    `json:"artist"`
 }
 
 type apiClient struct {
@@ -507,7 +507,7 @@ func addTrackUI(cfg config, client *apiClient) error {
 	selected := filterTracks(tracks, selectedIDs)
 	if action == "Rate Track (MPD Sticker)" {
 		for _, track := range selected {
-			rating, err := inputRating(cfg, fmt.Sprintf("%s - %s", fallback(track.Artist, "Unknown Artist"), fallback(track.Title, "Unknown Title")))
+			rating, err := inputRating(cfg, fmt.Sprintf("%s - %s", textOr(track.Artist, "Unknown Artist"), textOr(track.Title, "Unknown Title")))
 			if err != nil {
 				return err
 			}
@@ -550,7 +550,7 @@ func currentTrackUI(cfg config, client *apiClient) error {
 		if err := client.get("current_track/rating", &current); err != nil {
 			return err
 		}
-		rating, err := inputRating(cfg, fmt.Sprintf("%s - %s", fallback(current.Artist, "Unknown Artist"), fallback(current.Title, "Unknown Title")))
+		rating, err := inputRating(cfg, fmt.Sprintf("%s - %s", textOr(current.Artist, "Unknown Artist"), textOr(current.Title, "Unknown Title")))
 		if err != nil {
 			return err
 		}
@@ -636,10 +636,10 @@ func formatAlbumLine(cfg config, a album) string {
 func formatTrackLine(cfg config, t track) string {
 	return fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s r=%s",
 		cfg.Columns.Track, trackNumberString(t.Track),
-		cfg.Columns.Title, t.Title,
-		cfg.Columns.Artist, t.Artist,
-		cfg.Columns.Album, t.Album,
-		cfg.Columns.Date, fallback(t.Date, "0000"),
+		cfg.Columns.Title, textOr(t.Title, ""),
+		cfg.Columns.Artist, textOr(t.Artist, ""),
+		cfg.Columns.Album, textOr(t.Album, ""),
+		cfg.Columns.Date, textOr(t.Date, "0000"),
 		cfg.Columns.ID, t.ID,
 		ratingString(t.Rating),
 	)
@@ -794,6 +794,14 @@ func fallback(value, alt string) string {
 		return alt
 	}
 	return value
+}
+
+func textOr(value any, alt string) string {
+	text := strings.TrimSpace(stringify(value))
+	if text == "" {
+		return alt
+	}
+	return text
 }
 
 func getenv(key, fallback string) string {

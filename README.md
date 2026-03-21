@@ -12,8 +12,9 @@ Clerk is an API-first MPD queue and rating tool.
 
 - `~/.config/clerk/clerkd.toml`: daemon configuration
 - `~/.config/clerk/clerk-rofi.toml`: rofi client configuration
+- `~/.config/clerk/clerk-musiclist.toml`: music list exporter configuration
 
-Both files are created automatically with defaults if they do not exist.
+These files are created automatically with defaults if they do not exist.
 
 ## Development
 
@@ -81,10 +82,7 @@ Useful commands:
 
 `clerk-musiclist` reads Clerk cache files, writes a static HTML page, and uploads it with `scp`.
 
-Important environment variables:
-
-- `CLERK_SYNC_HOST`
-- `CLERK_SYNC_PATH`
+It auto-creates `~/.config/clerk/clerk-musiclist.toml` with upload target and temp output settings.
 
 ## API Base URL
 
