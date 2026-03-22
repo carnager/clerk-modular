@@ -32,8 +32,7 @@ type config struct {
 		TimeoutSeconds float64  `toml:"timeout_seconds"`
 	} `toml:"autostart"`
 	UI struct {
-		Prompt string   `toml:"prompt"`
-		Menu   []string `toml:"menu"`
+		Menu []string `toml:"menu"`
 	} `toml:"ui"`
 	Columns struct {
 		Artist      int `toml:"artist"`
@@ -198,7 +197,6 @@ func loadConfig() (config, string, error) {
 	cfg.Autostart.SystemdUnit = stringify(autostart["systemd_unit"])
 	cfg.Autostart.Command = stringSlice(autostart["command"])
 	cfg.Autostart.TimeoutSeconds = floatFromAny(autostart["timeout_seconds"], 5.0)
-	cfg.UI.Prompt = stringify(ui["prompt"])
 	cfg.UI.Menu = stringSlice(ui["menu"])
 	cfg.Columns.Artist = intFromAny(columns["artist"], 30)
 	cfg.Columns.AlbumArtist = intFromAny(columns["album_artist"], 30)
@@ -222,8 +220,7 @@ command = ["clerkd"]
 timeout_seconds = 5.0
 
 [ui]
-prompt = "Clerk"
-menu = ["rofi", "-dmenu", "-p", "PLACEHOLDER"]
+menu = ["rofi", "-dmenu", "-p", "Clerk"]
 
 [columns]
 artist = 30
@@ -249,11 +246,8 @@ func applyDefaults(cfg *config) {
 	if len(cfg.Autostart.Command) == 0 {
 		cfg.Autostart.Command = []string{"clerkd"}
 	}
-	if cfg.UI.Prompt == "" {
-		cfg.UI.Prompt = "Clerk"
-	}
 	if len(cfg.UI.Menu) == 0 {
-		cfg.UI.Menu = []string{"rofi", "-dmenu", "-p", "PLACEHOLDER"}
+		cfg.UI.Menu = []string{"rofi", "-dmenu", "-p", "Clerk"}
 	}
 	if cfg.Columns.Artist == 0 {
 		cfg.Columns.Artist = 30
@@ -471,7 +465,7 @@ func addAlbumUI(cfg config, client *apiClient, mode string) error {
 		lines = append(lines, line)
 		lineIDs[menuSelectionKey(line)] = album.ID
 	}
-	selectedLines, err := runMenu(cfg, lines, cfg.UI.Prompt)
+	selectedLines, err := runMenu(cfg, lines)
 	if err != nil || len(selectedLines) == 0 {
 		return err
 	}
@@ -479,14 +473,14 @@ func addAlbumUI(cfg config, client *apiClient, mode string) error {
 	if err != nil || len(selectedIDs) == 0 {
 		return err
 	}
-	action, err := runSingleMenu(cfg, []string{"Add", "Insert", "Replace", "Rate"}, cfg.UI.Prompt)
+	action, err := runSingleMenu(cfg, []string{"Add", "Insert", "Replace", "Rate"})
 	if err != nil || action == "" {
 		return err
 	}
 	selected := filterAlbums(albums, selectedIDs)
 	if action == "Rate" {
 		for _, album := range selected {
-			rating, err := inputRating(cfg, fmt.Sprintf("%s - %s", fallback(album.AlbumArtist, "N/A"), fallback(album.Album, "N/A")))
+			rating, err := inputRating(cfg)
 			if err != nil {
 				return err
 			}
@@ -529,7 +523,7 @@ func addTrackUI(cfg config, client *apiClient) error {
 		lines = append(lines, line)
 		lineIDs[menuSelectionKey(line)] = track.ID
 	}
-	selectedLines, err := runMenu(cfg, lines, cfg.UI.Prompt)
+	selectedLines, err := runMenu(cfg, lines)
 	if err != nil || len(selectedLines) == 0 {
 		return err
 	}
@@ -537,14 +531,14 @@ func addTrackUI(cfg config, client *apiClient) error {
 	if err != nil || len(selectedIDs) == 0 {
 		return err
 	}
-	action, err := runSingleMenu(cfg, []string{"Add", "Insert", "Replace", "Rate Track (MPD Sticker)"}, cfg.UI.Prompt)
+	action, err := runSingleMenu(cfg, []string{"Add", "Insert", "Replace", "Rate Track (MPD Sticker)"})
 	if err != nil || action == "" {
 		return err
 	}
 	selected := filterTracks(tracks, selectedIDs)
 	if action == "Rate Track (MPD Sticker)" {
 		for _, track := range selected {
-			rating, err := inputRating(cfg, fmt.Sprintf("%s - %s", textOr(track.Artist, "Unknown Artist"), textOr(track.Title, "Unknown Title")))
+			rating, err := inputRating(cfg)
 			if err != nil {
 				return err
 			}
@@ -567,7 +561,7 @@ func addTrackUI(cfg config, client *apiClient) error {
 }
 
 func currentTrackUI(cfg config, client *apiClient) error {
-	action, err := runSingleMenu(cfg, []string{"Rate Album", "Rate Track (MPD Sticker)"}, cfg.UI.Prompt)
+	action, err := runSingleMenu(cfg, []string{"Rate Album", "Rate Track (MPD Sticker)"})
 	if err != nil || action == "" {
 		return err
 	}
@@ -577,7 +571,7 @@ func currentTrackUI(cfg config, client *apiClient) error {
 		if err := client.get("current_album/rating", &current); err != nil {
 			return err
 		}
-		rating, err := inputRating(cfg, fmt.Sprintf("%s - %s", fallback(current.AlbumArtist, "Unknown Artist"), fallback(current.Album, "Unknown Album")))
+		rating, err := inputRating(cfg)
 		if err != nil {
 			return err
 		}
@@ -587,7 +581,7 @@ func currentTrackUI(cfg config, client *apiClient) error {
 		if err := client.get("current_track/rating", &current); err != nil {
 			return err
 		}
-		rating, err := inputRating(cfg, fmt.Sprintf("%s - %s", textOr(current.Artist, "Unknown Artist"), textOr(current.Title, "Unknown Title")))
+		rating, err := inputRating(cfg)
 		if err != nil {
 			return err
 		}
@@ -597,12 +591,9 @@ func currentTrackUI(cfg config, client *apiClient) error {
 	}
 }
 
-func runMenu(cfg config, lines []string, prompt string) ([]string, error) {
+func runMenu(cfg config, lines []string) ([]string, error) {
 	cmdArgs := make([]string, len(cfg.UI.Menu))
 	copy(cmdArgs, cfg.UI.Menu)
-	for i, arg := range cmdArgs {
-		cmdArgs[i] = strings.ReplaceAll(arg, "PLACEHOLDER", prompt)
-	}
 	if len(cmdArgs) == 0 {
 		return nil, errors.New("ui.menu is empty")
 	}
@@ -634,16 +625,16 @@ func runMenu(cfg config, lines []string, prompt string) ([]string, error) {
 	return outLines, nil
 }
 
-func runSingleMenu(cfg config, lines []string, prompt string) (string, error) {
-	selected, err := runMenu(cfg, lines, prompt)
+func runSingleMenu(cfg config, lines []string) (string, error) {
+	selected, err := runMenu(cfg, lines)
 	if err != nil || len(selected) == 0 {
 		return "", err
 	}
 	return strings.TrimSpace(selected[0]), nil
 }
 
-func inputRating(cfg config, prompt string) (string, error) {
-	result, err := runMenu(cfg, []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "---", "Delete"}, prompt+" "+cfg.UI.Prompt)
+func inputRating(cfg config) (string, error) {
+	result, err := runMenu(cfg, []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "---", "Delete"})
 	if err != nil || len(result) == 0 || strings.TrimSpace(result[0]) == "" {
 		return "---", err
 	}

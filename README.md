@@ -100,8 +100,7 @@ command = ["clerkd"]
 timeout_seconds = 5.0
 
 [ui]
-prompt = "Clerk"
-menu = ["rofi", "-dmenu", "-p", "PLACEHOLDER"]
+menu = ["rofi", "-dmenu", "-p", "Clerk"]
 
 [columns]
 artist = 30
@@ -119,6 +118,7 @@ Notes:
   - `local` for the default Clerk Unix socket
   - a Unix socket path
   - `host:port` for HTTP API access
+- `ui.menu` is the full menu command and is executed as configured
 - when the target is local, `clerk-rofi` can auto-start `clerkd`
 
 ### `clerk-musiclist`
