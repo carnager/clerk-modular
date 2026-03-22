@@ -58,6 +58,8 @@ Important environment variables:
 - `CLERKD_HOST`
 - `CLERKD_PORT`
 - `CLERKD_SOCKET_PATH`
+- `CLERKD_MPD_HOST`
+- `CLERKD_MPD_PORT`
 - `CLERKD_MPD_ADDRESS`
 
 Default daemon config:
@@ -68,7 +70,8 @@ host = "0.0.0.0"
 port = 6601
 
 [mpd]
-address = "localhost"
+host = "localhost"
+port = 6600
 
 [random]
 tracks = 20
@@ -81,6 +84,8 @@ batch_size = 10000
 Notes:
 
 - `server.socket_path` is optional; when omitted Clerk uses the default runtime socket path
+- `mpd.host` and `mpd.port` are the primary MPD connection settings
+- `mpd.address` and `CLERKD_MPD_ADDRESS` are still accepted as compatibility fallbacks
 - `cache.batch_size` controls batched MPD library fetches during cache rebuilds
 - album ratings are stored by Clerk in `ratings.cache`
 - track ratings are stored in MPD stickers and mirrored into `tracks.cache`

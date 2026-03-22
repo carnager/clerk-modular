@@ -33,6 +33,8 @@ type config struct {
 		SocketPath string `toml:"socket_path"`
 	} `toml:"server"`
 	MPD struct {
+		Host    string `toml:"host"`
+		Port    int    `toml:"port"`
 		Address string `toml:"address"`
 	} `toml:"mpd"`
 	Random struct {
@@ -125,6 +127,8 @@ func loadConfig() (config, paths, error) {
 	cfg.Server.Host = stringify(server["host"])
 	cfg.Server.Port = intFromAny(server["port"], defaultPort)
 	cfg.Server.SocketPath = stringify(server["socket_path"])
+	cfg.MPD.Host = stringify(mpdSection["host"])
+	cfg.MPD.Port = intFromAny(mpdSection["port"], 6600)
 	cfg.MPD.Address = stringify(mpdSection["address"])
 	cfg.Random.Tracks = intFromAny(random["tracks"], 20)
 	cfg.Random.ArtistTag = stringify(random["artist_tag"])
@@ -139,7 +143,8 @@ host = "0.0.0.0"
 port = 6601
 
 [mpd]
-address = "localhost"
+host = "localhost"
+port = 6600
 
 [random]
 tracks = 20
@@ -160,8 +165,20 @@ func applyDefaults(cfg *config) {
 	if cfg.Server.SocketPath == "" {
 		cfg.Server.SocketPath = shared.DefaultSocketPath()
 	}
-	if cfg.MPD.Address == "" {
-		cfg.MPD.Address = "localhost"
+	if cfg.MPD.Address != "" {
+		host, port := parseHostPortString(cfg.MPD.Address, 6600)
+		if cfg.MPD.Host == "" {
+			cfg.MPD.Host = host
+		}
+		if cfg.MPD.Port <= 0 {
+			cfg.MPD.Port = port
+		}
+	}
+	if cfg.MPD.Host == "" {
+		cfg.MPD.Host = "localhost"
+	}
+	if cfg.MPD.Port <= 0 {
+		cfg.MPD.Port = 6600
 	}
 	if cfg.Random.Tracks <= 0 {
 		cfg.Random.Tracks = 20
@@ -181,8 +198,16 @@ func applyDefaults(cfg *config) {
 	if envSocketPath := os.Getenv("CLERKD_SOCKET_PATH"); envSocketPath != "" {
 		cfg.Server.SocketPath = envSocketPath
 	}
+	if envMPDHost := os.Getenv("CLERKD_MPD_HOST"); envMPDHost != "" {
+		cfg.MPD.Host = envMPDHost
+	}
+	if envMPDPort := os.Getenv("CLERKD_MPD_PORT"); envMPDPort != "" {
+		cfg.MPD.Port = intFromAny(envMPDPort, cfg.MPD.Port)
+	}
 	if envMPDAddress := os.Getenv("CLERKD_MPD_ADDRESS"); envMPDAddress != "" {
-		cfg.MPD.Address = envMPDAddress
+		host, port := parseHostPortString(envMPDAddress, cfg.MPD.Port)
+		cfg.MPD.Host = host
+		cfg.MPD.Port = port
 	}
 }
 
@@ -794,21 +819,39 @@ func (a *app) handleCurrentTrackRatingPost(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *app) dialMPD() (*mpd.Client, error) {
-	client, err := mpd.Dial("tcp", mpdAddress(a.cfg.MPD.Address))
+	client, err := mpd.Dial("tcp", mpdAddress(a.cfg.MPD.Host, a.cfg.MPD.Port))
 	if err != nil {
 		return nil, err
 	}
 	return client, nil
 }
 
-func mpdAddress(host string) string {
+func mpdAddress(host string, port int) string {
 	if host == "" {
-		return "localhost:6600"
+		host = "localhost"
 	}
-	if strings.Contains(host, ":") {
-		return host
+	if port <= 0 {
+		port = 6600
 	}
-	return host + ":6600"
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func parseHostPortString(value string, fallbackPort int) (string, int) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "localhost", max(fallbackPort, 6600)
+	}
+	host, portText, err := net.SplitHostPort(value)
+	if err == nil {
+		return host, intFromAny(portText, max(fallbackPort, 6600))
+	}
+	if strings.Count(value, ":") == 0 {
+		return value, max(fallbackPort, 6600)
+	}
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		return strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"), max(fallbackPort, 6600)
+	}
+	return value, max(fallbackPort, 6600)
 }
 
 func (a *app) createCache() error {
