@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,10 +13,13 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/vmihailenco/msgpack/v5"
+	"github.com/carnager/clerk-modular/internal/shared"
 )
 
 type config struct {
+	API struct {
+		BaseURL string `toml:"base_url"`
+	} `toml:"api"`
 	Upload struct {
 		Host string `toml:"host"`
 		Path string `toml:"path"`
@@ -25,12 +30,20 @@ type config struct {
 }
 
 type exportAlbum struct {
-	ID     string `json:"id"`
-	Artist string `json:"artist"`
-	Album  string `json:"album"`
-	Year   string `json:"year"`
-	YearInt int   `json:"year_int"`
-	Rating int    `json:"rating"`
+	ID      string `json:"id"`
+	Artist  string `json:"artist"`
+	Album   string `json:"album"`
+	Year    string `json:"year"`
+	YearInt int    `json:"year_int"`
+	Rating  int    `json:"rating"`
+}
+
+type apiAlbum struct {
+	ID          string `json:"id"`
+	AlbumArtist string `json:"albumartist"`
+	Album       string `json:"album"`
+	Date        string `json:"date"`
+	Rating      any    `json:"rating"`
 }
 
 func main() {
@@ -41,47 +54,27 @@ func main() {
 	if err != nil {
 		fatal(start, err)
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fatal(start, err)
-	}
-	xdgData := getenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
-	clerkDataDir := filepath.Join(xdgData, "clerk")
-	albumCacheFile := filepath.Join(clerkDataDir, "album.cache")
-	ratingsCacheFile := filepath.Join(clerkDataDir, "ratings.cache")
 
 	syncTargetHTML := filepath.Join(cfg.Upload.Host+":"+cfg.Upload.Path, "index.html")
 	tempHTMLFile := cfg.Output.TempFile
 
-	logf(start, "Loading data from caches...")
-	albumsRaw, err := readMapSlice(albumCacheFile)
+	logf(start, "Loading albums from Clerk API...")
+	albumsRaw, err := fetchAlbums(cfg.API.BaseURL)
 	if err != nil {
-		fatal(start, fmt.Errorf("read album cache: %w", err))
-	}
-	ratings, err := readRatings(ratingsCacheFile)
-	if err != nil {
-		fatal(start, fmt.Errorf("read ratings cache: %w", err))
+		fatal(start, fmt.Errorf("fetch albums: %w", err))
 	}
 
 	albums := make([]exportAlbum, 0, len(albumsRaw))
 	for _, raw := range albumsRaw {
-		key := albumKey(raw)
-		rating := 0
-		if value, ok := ratings[key]; ok {
-			rating, _ = strconv.Atoi(value)
-			if rating < 0 || rating > 10 {
-				rating = 0
-			}
-		}
 		year := stringify(raw["date"])
 		yearInt, _ := strconv.Atoi(year)
 		albums = append(albums, exportAlbum{
-			ID:      key,
+			ID:      stringify(raw["id"]),
 			Artist:  fallback(stringify(raw["albumartist"]), "Unknown Artist"),
 			Album:   fallback(stringify(raw["album"]), "Unknown Album"),
 			Year:    fallback(year, "N/A"),
 			YearInt: yearInt,
-			Rating:  rating,
+			Rating:  ratingInt(raw["rating"]),
 		})
 	}
 
@@ -127,8 +120,10 @@ func loadConfig() (config, error) {
 		return config{}, err
 	}
 	var cfg config
+	api, _ := raw["api"].(map[string]any)
 	upload, _ := raw["upload"].(map[string]any)
 	output, _ := raw["output"].(map[string]any)
+	cfg.API.BaseURL = stringify(api["base_url"])
 	cfg.Upload.Host = stringify(upload["host"])
 	cfg.Upload.Path = stringify(upload["path"])
 	cfg.Output.TempFile = stringify(output["temp_file"])
@@ -137,7 +132,10 @@ func loadConfig() (config, error) {
 }
 
 func defaultConfigText() string {
-	return `[upload]
+	return `[api]
+base_url = "local"
+
+[upload]
 host = "proteus"
 path = "/srv/http/list"
 
@@ -147,6 +145,9 @@ temp_file = "/tmp/musiclist_albums_only.html"
 }
 
 func applyDefaults(cfg *config) {
+	if cfg.API.BaseURL == "" {
+		cfg.API.BaseURL = shared.LocalAPIConfigValue
+	}
 	if cfg.Upload.Host == "" {
 		cfg.Upload.Host = "proteus"
 	}
@@ -156,6 +157,56 @@ func applyDefaults(cfg *config) {
 	if cfg.Output.TempFile == "" {
 		cfg.Output.TempFile = "/tmp/musiclist_albums_only.html"
 	}
+}
+
+func fetchAlbums(baseURL string) ([]map[string]any, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return nil, fmt.Errorf("api.base_url is empty")
+	}
+	if shared.IsLocalAPIConfigValue(baseURL) {
+		baseURL = shared.LocalAPIBaseURL
+		client = shared.NewLocalHTTPClient(30*time.Second, shared.DefaultSocketPath())
+	} else {
+		baseURL = strings.TrimRight(baseURL, "/")
+	}
+
+	resp, err := client.Get(baseURL + "/albums")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("http %d from %s/albums: %s", resp.StatusCode, baseURL, strings.TrimSpace(string(body)))
+	}
+
+	var albums []apiAlbum
+	if err := json.NewDecoder(resp.Body).Decode(&albums); err != nil {
+		return nil, err
+	}
+
+	out := make([]map[string]any, 0, len(albums))
+	for _, album := range albums {
+		out = append(out, map[string]any{
+			"id":          album.ID,
+			"albumartist": album.AlbumArtist,
+			"album":       album.Album,
+			"date":        album.Date,
+			"rating":      album.Rating,
+		})
+	}
+	return out, nil
+}
+
+func ratingInt(value any) int {
+	rating, _ := strconv.Atoi(strings.TrimSpace(stringify(value)))
+	if rating < 0 || rating > 10 {
+		return 0
+	}
+	return rating
 }
 
 func renderHTML(jsonData string) string {
@@ -395,82 +446,16 @@ func renderHTML(jsonData string) string {
 </html>`, time.Now().Format("2006-01-02 15:04:05"), jsonData)
 }
 
-func readMapSlice(path string) ([]map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var out []map[string]any
-	if len(data) == 0 {
-		return []map[string]any{}, nil
-	}
-	if err := msgpack.Unmarshal(data, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func readRatings(path string) (map[string]string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return map[string]string{}, nil
-		}
-		return nil, err
-	}
-	if len(data) == 0 {
-		return map[string]string{}, nil
-	}
-	var out map[string]string
-	if err := msgpack.Unmarshal(data, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func albumKey(item map[string]any) string {
-	artist := stringify(item["albumartist"])
-	album := stringify(item["album"])
-	date := stringify(item["date"])
-	if artist == "" || album == "" || date == "" || artist == "None" || album == "None" || date == "None" {
-		return ""
-	}
-	return artist + "|||" + album + "|||" + date
-}
-
 func stringify(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	case []any:
-		if len(v) == 0 {
-			return ""
-		}
-		return stringify(v[0])
-	case float64:
-		if float64(int(v)) == v {
-			return strconv.Itoa(int(v))
-		}
-		return fmt.Sprintf("%v", v)
-	default:
-		return fmt.Sprintf("%v", v)
-	}
+	return shared.Stringify(value)
 }
 
 func fallback(value, alt string) string {
-	if strings.TrimSpace(value) == "" {
-		return alt
-	}
-	return value
+	return shared.Fallback(value, alt)
 }
 
 func getenv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
+	return shared.Getenv(key, fallback)
 }
 
 func logf(start time.Time, format string, args ...any) {

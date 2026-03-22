@@ -16,9 +16,10 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/carnager/clerk-modular/internal/shared"
 )
 
-const defaultLocalAPIBaseURL = "http://localhost:6601/api/v1"
+const defaultLocalAPIBaseURL = shared.LocalAPIConfigValue
 
 type config struct {
 	API struct {
@@ -70,14 +71,15 @@ type currentAlbum struct {
 }
 
 type currentTrack struct {
-	Rating any    `json:"rating"`
-	Title  any    `json:"title"`
-	Artist any    `json:"artist"`
+	Rating any `json:"rating"`
+	Title  any `json:"title"`
+	Artist any `json:"artist"`
 }
 
 type apiClient struct {
 	baseURL              string
 	autoStartLocalDaemon bool
+	useLocalSocket       bool
 	localServiceUnit     string
 	localServiceCommand  []string
 	startupTimeout       time.Duration
@@ -92,21 +94,21 @@ func main() {
 	}
 
 	var (
-		optAlbums    = flag.Bool("a", false, "")
-		optLatest    = flag.Bool("l", false, "")
-		optTracks    = flag.Bool("t", false, "")
-		optRandomA   = flag.Bool("A", false, "")
-		optRandomT   = flag.Bool("T", false, "")
-		optCurrent   = flag.Bool("c", false, "")
-		optUpdate    = flag.Bool("u", false, "")
-		optRegen     = flag.Bool("x", false, "")
-		optHelp      = flag.Bool("h", false, "")
-		apiBaseURL   = flag.String("api-base-url", "", "")
-		noAutostart  = flag.Bool("no-auto-start-local-daemon", false, "")
+		optAlbums   = flag.Bool("a", false, "")
+		optLatest   = flag.Bool("l", false, "")
+		optTracks   = flag.Bool("t", false, "")
+		optRandomA  = flag.Bool("A", false, "")
+		optRandomT  = flag.Bool("T", false, "")
+		optCurrent  = flag.Bool("c", false, "")
+		optUpdate   = flag.Bool("u", false, "")
+		optRegen    = flag.Bool("x", false, "")
+		optHelp     = flag.Bool("h", false, "")
+		apiBaseURL  = flag.String("api-base-url", "", "")
+		noAutostart = flag.Bool("no-auto-start-local-daemon", false, "")
 	)
 	flag.Parse()
 
-	effectiveURL, implicitLocal := resolveAPIBaseURL(cfg, *apiBaseURL)
+	effectiveURL, implicitLocal, useLocalSocket := resolveAPIBaseURL(cfg, *apiBaseURL)
 	if *optHelp || !(*optAlbums || *optLatest || *optTracks || *optRandomA || *optRandomT || *optCurrent || *optUpdate || *optRegen) {
 		fmt.Print(helpText(effectiveURL, implicitLocal))
 		return
@@ -119,7 +121,7 @@ func main() {
 		return
 	}
 
-	client := newAPIClient(cfg, effectiveURL, implicitLocal && !*noAutostart)
+	client := newAPIClient(cfg, effectiveURL, implicitLocal && !*noAutostart, useLocalSocket)
 	if err := client.ensureAvailable(); err != nil {
 		fatal(err)
 	}
@@ -207,7 +209,7 @@ func loadConfig() (config, string, error) {
 
 func defaultConfigText() string {
 	return `[api]
-base_url = "http://localhost:6601/api/v1"
+base_url = "local"
 
 [autostart]
 enabled = true
@@ -272,16 +274,19 @@ func applyDefaults(cfg *config) {
 	}
 }
 
-func resolveAPIBaseURL(cfg config, override string) (string, bool) {
+func resolveAPIBaseURL(cfg config, override string) (string, bool, bool) {
 	base := strings.TrimSpace(override)
 	if base == "" {
 		base = strings.TrimSpace(cfg.API.BaseURL)
 	}
-	if base == "" {
+	if base == "" || shared.IsLocalAPIConfigValue(base) {
 		base = defaultLocalAPIBaseURL
 	}
+	if shared.IsLocalAPIConfigValue(base) {
+		return shared.LocalAPIBaseURL, true, true
+	}
 	base = strings.TrimRight(base, "/")
-	return base, base == defaultLocalAPIBaseURL
+	return base, shared.IsLoopbackAPIBaseURL(base), false
 }
 
 func helpText(apiBaseURL string, autoStart bool) string {
@@ -306,14 +311,19 @@ Defaults:
 `, apiBaseURL, auto)
 }
 
-func newAPIClient(cfg config, baseURL string, autoStart bool) *apiClient {
+func newAPIClient(cfg config, baseURL string, autoStart bool, useLocalSocket bool) *apiClient {
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	if useLocalSocket {
+		httpClient = shared.NewLocalHTTPClient(10*time.Second, shared.DefaultSocketPath())
+	}
 	return &apiClient{
 		baseURL:              baseURL,
 		autoStartLocalDaemon: autoStart && cfg.Autostart.Enabled,
+		useLocalSocket:       useLocalSocket,
 		localServiceUnit:     cfg.Autostart.SystemdUnit,
 		localServiceCommand:  cfg.Autostart.Command,
 		startupTimeout:       time.Duration(cfg.Autostart.TimeoutSeconds * float64(time.Second)),
-		httpClient:           &http.Client{Timeout: 10 * time.Second},
+		httpClient:           httpClient,
 	}
 }
 
@@ -445,10 +455,17 @@ func addAlbumUI(cfg config, client *apiClient, mode string) error {
 		return errors.New("no albums available")
 	}
 	lines := make([]string, 0, len(albums))
+	lineIDs := make(map[string]string, len(albums))
 	for _, album := range albums {
-		lines = append(lines, formatAlbumLine(cfg, album))
+		line := formatAlbumLine(cfg, album)
+		lines = append(lines, line)
+		lineIDs[menuSelectionKey(line)] = album.ID
 	}
-	selectedIDs, err := runMenu(cfg, lines, true, cfg.UI.Prompt)
+	selectedLines, err := runMenu(cfg, lines, cfg.UI.Prompt)
+	if err != nil || len(selectedLines) == 0 {
+		return err
+	}
+	selectedIDs, err := mapSelectedLinesToIDs(selectedLines, lineIDs)
 	if err != nil || len(selectedIDs) == 0 {
 		return err
 	}
@@ -463,7 +480,10 @@ func addAlbumUI(cfg config, client *apiClient, mode string) error {
 			if err != nil {
 				return err
 			}
-			if err := client.post("albums/"+album.ID+"/rating", map[string]string{"rating": rating}, nil); err != nil {
+			if err := client.post("albums/"+album.ID+"/rating", map[string]string{
+				"rating":    rating,
+				"list_mode": mode,
+			}, nil); err != nil {
 				return err
 			}
 		}
@@ -493,10 +513,17 @@ func addTrackUI(cfg config, client *apiClient) error {
 		return errors.New("no tracks available")
 	}
 	lines := make([]string, 0, len(tracks))
+	lineIDs := make(map[string]string, len(tracks))
 	for _, track := range tracks {
-		lines = append(lines, formatTrackLine(cfg, track))
+		line := formatTrackLine(cfg, track)
+		lines = append(lines, line)
+		lineIDs[menuSelectionKey(line)] = track.ID
 	}
-	selectedIDs, err := runMenu(cfg, lines, true, cfg.UI.Prompt)
+	selectedLines, err := runMenu(cfg, lines, cfg.UI.Prompt)
+	if err != nil || len(selectedLines) == 0 {
+		return err
+	}
+	selectedIDs, err := mapSelectedLinesToIDs(selectedLines, lineIDs)
 	if err != nil || len(selectedIDs) == 0 {
 		return err
 	}
@@ -560,7 +587,7 @@ func currentTrackUI(cfg config, client *apiClient) error {
 	}
 }
 
-func runMenu(cfg config, lines []string, trim bool, prompt string) ([]string, error) {
+func runMenu(cfg config, lines []string, prompt string) ([]string, error) {
 	cmdArgs := make([]string, len(cfg.UI.Menu))
 	copy(cmdArgs, cfg.UI.Menu)
 	for i, arg := range cmdArgs {
@@ -594,21 +621,11 @@ func runMenu(cfg config, lines []string, trim bool, prompt string) ([]string, er
 	if len(outLines) == 1 && outLines[0] == "" {
 		return nil, nil
 	}
-	if trim {
-		ids := make([]string, 0, len(outLines))
-		for _, line := range outLines {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				ids = append(ids, parts[len(parts)-2])
-			}
-		}
-		return ids, nil
-	}
-	return outLines[:1], nil
+	return outLines, nil
 }
 
 func runSingleMenu(cfg config, lines []string, prompt string) (string, error) {
-	selected, err := runMenu(cfg, lines, false, prompt)
+	selected, err := runMenu(cfg, lines, prompt)
 	if err != nil || len(selected) == 0 {
 		return "", err
 	}
@@ -616,11 +633,27 @@ func runSingleMenu(cfg config, lines []string, prompt string) (string, error) {
 }
 
 func inputRating(cfg config, prompt string) (string, error) {
-	result, err := runMenu(cfg, []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "---", "Delete"}, false, prompt+" "+cfg.UI.Prompt)
+	result, err := runMenu(cfg, []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "---", "Delete"}, prompt+" "+cfg.UI.Prompt)
 	if err != nil || len(result) == 0 || strings.TrimSpace(result[0]) == "" {
 		return "---", err
 	}
 	return strings.TrimSpace(result[0]), nil
+}
+
+func mapSelectedLinesToIDs(lines []string, lineIDs map[string]string) ([]string, error) {
+	ids := make([]string, 0, len(lines))
+	for _, line := range lines {
+		id, ok := lineIDs[menuSelectionKey(line)]
+		if !ok {
+			return nil, fmt.Errorf("could not resolve menu selection %q", line)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func menuSelectionKey(line string) string {
+	return strings.TrimRight(line, " \t")
 }
 
 func formatAlbumLine(cfg config, a album) string {
@@ -701,28 +734,7 @@ func trackNumberString(value any) string {
 }
 
 func stringify(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	case []any:
-		if len(v) == 0 {
-			return ""
-		}
-		return stringify(v[0])
-	case int:
-		return strconv.Itoa(v)
-	case int64:
-		return strconv.FormatInt(v, 10)
-	case float64:
-		if float64(int(v)) == v {
-			return strconv.Itoa(int(v))
-		}
-		return fmt.Sprintf("%v", v)
-	default:
-		return fmt.Sprintf("%v", v)
-	}
+	return shared.Stringify(value)
 }
 
 func stringSlice(value any) []string {
@@ -741,59 +753,19 @@ func stringSlice(value any) []string {
 }
 
 func intFromAny(value any, fallback int) int {
-	switch v := value.(type) {
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case float64:
-		return int(v)
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err == nil {
-			return n
-		}
-	}
-	return fallback
+	return shared.IntFromAny(value, fallback)
 }
 
 func floatFromAny(value any, fallback float64) float64 {
-	switch v := value.(type) {
-	case float64:
-		return v
-	case int:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case string:
-		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		if err == nil {
-			return n
-		}
-	}
-	return fallback
+	return shared.FloatFromAny(value, fallback)
 }
 
 func boolFromAny(value any, fallback bool) bool {
-	switch v := value.(type) {
-	case bool:
-		return v
-	case string:
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "1", "true", "yes", "on":
-			return true
-		case "0", "false", "no", "off":
-			return false
-		}
-	}
-	return fallback
+	return shared.BoolFromAny(value, fallback)
 }
 
 func fallback(value, alt string) string {
-	if strings.TrimSpace(value) == "" {
-		return alt
-	}
-	return value
+	return shared.Fallback(value, alt)
 }
 
 func textOr(value any, alt string) string {
@@ -805,8 +777,5 @@ func textOr(value any, alt string) string {
 }
 
 func getenv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
+	return shared.Getenv(key, fallback)
 }

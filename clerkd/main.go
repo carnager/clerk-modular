@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,19 +16,21 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/carnager/clerk-modular/internal/shared"
 	"github.com/fhs/gompd/v2/mpd"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
 const (
-	defaultHost      = "0.0.0.0"
-	defaultPort      = 6601
+	defaultHost = "0.0.0.0"
+	defaultPort = 6601
 )
 
 type config struct {
 	Server struct {
-		Host string `toml:"host"`
-		Port int    `toml:"port"`
+		Host       string `toml:"host"`
+		Port       int    `toml:"port"`
+		SocketPath string `toml:"socket_path"`
 	} `toml:"server"`
 	MPD struct {
 		Address string `toml:"address"`
@@ -51,10 +54,10 @@ type paths struct {
 }
 
 type app struct {
-	cfg       config
-	paths     paths
-	addr      string
-	logger    *log.Logger
+	cfg    config
+	paths  paths
+	addr   string
+	logger *log.Logger
 }
 
 func main() {
@@ -75,8 +78,7 @@ func main() {
 		logger.Fatalf("startup failed: %v", err)
 	}
 
-	logger.Printf("serving on %s", a.addr)
-	if err := http.ListenAndServe(a.addr, a.routes()); err != nil {
+	if err := a.serve(); err != nil {
 		logger.Fatalf("listen and serve: %v", err)
 	}
 }
@@ -122,6 +124,7 @@ func loadConfig() (config, paths, error) {
 	cache, _ := raw["cache"].(map[string]any)
 	cfg.Server.Host = stringify(server["host"])
 	cfg.Server.Port = intFromAny(server["port"], defaultPort)
+	cfg.Server.SocketPath = stringify(server["socket_path"])
 	cfg.MPD.Address = stringify(mpdSection["address"])
 	cfg.Random.Tracks = intFromAny(random["tracks"], 20)
 	cfg.Random.ArtistTag = stringify(random["artist_tag"])
@@ -154,6 +157,9 @@ func applyDefaults(cfg *config) {
 	if cfg.Server.Port <= 0 {
 		cfg.Server.Port = defaultPort
 	}
+	if cfg.Server.SocketPath == "" {
+		cfg.Server.SocketPath = shared.DefaultSocketPath()
+	}
 	if cfg.MPD.Address == "" {
 		cfg.MPD.Address = "localhost"
 	}
@@ -172,9 +178,64 @@ func applyDefaults(cfg *config) {
 	if envPort := os.Getenv("CLERKD_PORT"); envPort != "" {
 		cfg.Server.Port = intFromAny(envPort, cfg.Server.Port)
 	}
+	if envSocketPath := os.Getenv("CLERKD_SOCKET_PATH"); envSocketPath != "" {
+		cfg.Server.SocketPath = envSocketPath
+	}
 	if envMPDAddress := os.Getenv("CLERKD_MPD_ADDRESS"); envMPDAddress != "" {
 		cfg.MPD.Address = envMPDAddress
 	}
+}
+
+func (a *app) serve() error {
+	handler := a.routes()
+
+	tcpListener, err := net.Listen("tcp", a.addr)
+	if err != nil {
+		return err
+	}
+	a.logger.Printf("serving tcp on %s", a.addr)
+
+	socketListener, err := a.listenUnixSocket()
+	if err != nil {
+		_ = tcpListener.Close()
+		return err
+	}
+	a.logger.Printf("serving unix socket on %s", a.cfg.Server.SocketPath)
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- http.Serve(tcpListener, handler)
+	}()
+	go func() {
+		errCh <- http.Serve(socketListener, handler)
+	}()
+
+	err = <-errCh
+	_ = tcpListener.Close()
+	_ = socketListener.Close()
+	return err
+}
+
+func (a *app) listenUnixSocket() (net.Listener, error) {
+	socketPath := a.cfg.Server.SocketPath
+	if socketPath == "" {
+		return nil, fmt.Errorf("empty socket path")
+	}
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+	return listener, nil
 }
 
 func (a *app) routes() http.Handler {
@@ -289,7 +350,12 @@ func (a *app) handleTracks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleAlbumRatingGet(w http.ResponseWriter, r *http.Request) {
-	albums, err := a.readMapSlice(a.paths.AlbumCacheFile)
+	cachePath, err := a.albumCachePath(strings.TrimSpace(r.URL.Query().Get("list_mode")))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	albums, err := a.readMapSlice(cachePath)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -323,7 +389,16 @@ func (a *app) handleAlbumRatingPost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid rating"})
 		return
 	}
-	albums, err := a.readMapSlice(a.paths.AlbumCacheFile)
+	listMode := stringify(body["list_mode"])
+	if listMode == "" {
+		listMode = strings.TrimSpace(r.URL.Query().Get("list_mode"))
+	}
+	cachePath, err := a.albumCachePath(listMode)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	albums, err := a.readMapSlice(cachePath)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -743,7 +818,11 @@ func (a *app) createCache() error {
 	}
 	defer client.Close()
 
-	songs, err := client.ListAllInfo("")
+	songs, err := a.fetchAllSongsBatched(client)
+	if err != nil {
+		return err
+	}
+	trackRatings, err := a.loadTrackRatingsWithClient(client)
 	if err != nil {
 		return err
 	}
@@ -782,6 +861,7 @@ func (a *app) createCache() error {
 			"album":       album,
 			"date":        date,
 			"file":        file,
+			"rating":      valueOrNil(trackRatings[file]),
 			"id":          strconv.Itoa(len(tracks)),
 		})
 
@@ -832,6 +912,48 @@ func (a *app) createCache() error {
 	return nil
 }
 
+func (a *app) fetchAllSongsBatched(client *mpd.Client) ([]mpd.Attrs, error) {
+	stats, err := client.Stats()
+	if err != nil {
+		return nil, err
+	}
+
+	totalSongs := intFromAny(stats["songs"], 0)
+	if totalSongs <= 0 {
+		a.logger.Printf("cache rebuild: MPD reports no songs")
+		return []mpd.Attrs{}, nil
+	}
+
+	batchSize := a.cfg.Cache.BatchSize
+	if batchSize <= 0 {
+		batchSize = 10000
+	}
+
+	a.logger.Printf("cache rebuild: fetching %d songs in batches of %d", totalSongs, batchSize)
+
+	allSongs := make([]mpd.Attrs, 0, totalSongs)
+	for offset := 0; offset < totalSongs; {
+		startIndex := offset + 1
+		endIndex := offset + batchSize
+		window := fmt.Sprintf("%d:%d", startIndex, endIndex)
+
+		batch, err := client.Search("filename", "", "window", window)
+		if err != nil {
+			return nil, fmt.Errorf("batch search at offset %d: %w", offset, err)
+		}
+		if len(batch) == 0 {
+			a.logger.Printf("cache rebuild: stopped early after %d/%d songs; empty batch for window %s", offset, totalSongs, window)
+			break
+		}
+
+		allSongs = append(allSongs, batch...)
+		offset += len(batch)
+		a.logger.Printf("cache rebuild: fetched %d/%d songs", offset, totalSongs)
+	}
+
+	return allSongs, nil
+}
+
 func (a *app) updateAlbumRating(album map[string]any, rating string) (bool, error) {
 	key := albumKey(album)
 	if key == "" {
@@ -878,11 +1000,17 @@ func (a *app) updateTrackRating(client *mpd.Client, track map[string]any, rating
 		if err := client.StickerDelete(file, "rating"); err != nil {
 			return false, err
 		}
+		if err := a.updateTrackCacheRating(file, ""); err != nil {
+			return false, err
+		}
 		return true, nil
 	case "---":
 		return false, nil
 	default:
 		if err := client.StickerSet(file, "rating", rating); err != nil {
+			return false, err
+		}
+		if err := a.updateTrackCacheRating(file, rating); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -1079,6 +1207,9 @@ func randomTracks(client *mpd.Client, tag string, count int) error {
 }
 
 func (a *app) albumCachePath(mode string) (string, error) {
+	if mode == "" {
+		mode = "album"
+	}
 	switch mode {
 	case "album":
 		return a.paths.AlbumCacheFile, nil
@@ -1108,6 +1239,45 @@ func (a *app) loadRatings() (map[string]string, error) {
 		ratings = map[string]string{}
 	}
 	return ratings, nil
+}
+
+func (a *app) loadTrackRatingsWithClient(client *mpd.Client) (map[string]string, error) {
+	files, stickers, err := client.StickerFind("", "rating")
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such sticker") {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+
+	ratings := make(map[string]string, len(files))
+	for i, file := range files {
+		if file == "" || i >= len(stickers) {
+			continue
+		}
+		ratings[file] = stickers[i].Value
+	}
+	return ratings, nil
+}
+
+func (a *app) updateTrackCacheRating(file, rating string) error {
+	tracks, err := a.readMapSlice(a.paths.TracksCacheFile)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, track := range tracks {
+		if stringify(track["file"]) != file {
+			continue
+		}
+		track["rating"] = valueOrNil(rating)
+		changed = true
+		break
+	}
+	if !changed {
+		return nil
+	}
+	return a.writeMapSlice(a.paths.TracksCacheFile, tracks)
 }
 
 func (a *app) saveRatings(ratings map[string]string) error {
@@ -1272,37 +1442,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func stringify(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	case []byte:
-		return string(v)
-	case int:
-		return strconv.Itoa(v)
-	case int8, int16, int32, int64:
-		return fmt.Sprintf("%d", v)
-	case uint, uint8, uint16, uint32, uint64:
-		return fmt.Sprintf("%d", v)
-	case float32:
-		if float32(int(v)) == v {
-			return strconv.Itoa(int(v))
-		}
-		return fmt.Sprintf("%v", v)
-	case float64:
-		if float64(int(v)) == v {
-			return strconv.Itoa(int(v))
-		}
-		return fmt.Sprintf("%v", v)
-	case []any:
-		if len(v) == 0 {
-			return ""
-		}
-		return stringify(v[0])
-	default:
-		return fmt.Sprintf("%v", v)
-	}
+	return shared.Stringify(value)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1352,10 +1492,7 @@ func cloneMap(src map[string]any) map[string]any {
 }
 
 func getenvDefault(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
+	return shared.Getenv(key, fallback)
 }
 
 func getenvIntDefault(key string, fallback int) int {
@@ -1371,69 +1508,9 @@ func getenvIntDefault(key string, fallback int) int {
 }
 
 func intFromAny(value any, fallback int) int {
-	switch v := value.(type) {
-	case int:
-		return v
-	case int8, int16, int32, int64:
-		return int(reflectInt64(v))
-	case uint, uint8, uint16, uint32, uint64:
-		return int(reflectUint64(v))
-	case float32:
-		return int(v)
-	case float64:
-		return int(v)
-	case string:
-		n, err := strconv.Atoi(v)
-		if err == nil {
-			return n
-		}
-	}
-	return fallback
+	return shared.IntFromAny(value, fallback)
 }
 
 func boolFromAny(value any, fallback bool) bool {
-	switch v := value.(type) {
-	case bool:
-		return v
-	case string:
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "1", "true", "yes", "on":
-			return true
-		case "0", "false", "no", "off":
-			return false
-		}
-	}
-	return fallback
-}
-
-func reflectInt64(value any) int64 {
-	switch v := value.(type) {
-	case int8:
-		return int64(v)
-	case int16:
-		return int64(v)
-	case int32:
-		return int64(v)
-	case int64:
-		return v
-	default:
-		return 0
-	}
-}
-
-func reflectUint64(value any) uint64 {
-	switch v := value.(type) {
-	case uint:
-		return uint64(v)
-	case uint8:
-		return uint64(v)
-	case uint16:
-		return uint64(v)
-	case uint32:
-		return uint64(v)
-	case uint64:
-		return v
-	default:
-		return 0
-	}
+	return shared.BoolFromAny(value, fallback)
 }
