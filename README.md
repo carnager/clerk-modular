@@ -5,8 +5,8 @@ Clerk is an API-first MPD queue and rating tool.
 It consists of:
 
 - `clerkd`: the daemon that talks to MPD, builds caches, stores album ratings, and exposes the HTTP API
-- `clerk-rofi`: an interactive rofi client for browsing, queueing, and rating music
-- `clerk-musiclist`: a static HTML exporter that reads album data from the Clerk API and uploads the result with `scp`
+- `clerk-rofi`: an interactive API client for browsing, queueing, and rating music through rofi
+- `clerk-musiclist`: an API client that renders a static HTML music list and uploads it with `scp`
 
 ## Repository Layout
 
@@ -20,13 +20,13 @@ It consists of:
 
 It connects to MPD, builds local msgpack caches, and serves the Clerk API over:
 
-- TCP, by default on `0.0.0.0:6601`
-- a Unix socket, by default at `$XDG_RUNTIME_DIR/clerk/clerkd.sock`
+- one or more configured bind addresses
+- the default config listens on both `0.0.0.0:6601` and `$XDG_RUNTIME_DIR/clerk/clerkd.sock`
 
 The two supported client modes are:
 
-- local: use `api.base_url = "local"` to talk to the daemon over the Unix socket
-- remote: use a normal HTTP URL such as `http://host:6601/api/v1`
+- local: use `api.address = "local"` or a Unix socket path
+- remote: use `api.address = "host:port"`
 
 ## Configuration
 
@@ -55,23 +55,17 @@ XDG base directory variables are respected:
 
 Important environment variables:
 
-- `CLERKD_HOST`
-- `CLERKD_PORT`
-- `CLERKD_SOCKET_PATH`
-- `CLERKD_MPD_HOST`
-- `CLERKD_MPD_PORT`
+- `CLERKD_BIND_TO_ADDRESS`
 - `CLERKD_MPD_ADDRESS`
 
 Default daemon config:
 
 ```toml
 [server]
-host = "0.0.0.0"
-port = 6601
+bind_to_address = ["0.0.0.0:6601", "/run/user/1000/clerk/clerkd.sock"]
 
 [mpd]
-host = "localhost"
-port = 6600
+address = "localhost:6600"
 
 [random]
 tracks = 20
@@ -83,9 +77,10 @@ batch_size = 10000
 
 Notes:
 
-- `server.socket_path` is optional; when omitted Clerk uses the default runtime socket path
-- `mpd.host` and `mpd.port` are the primary MPD connection settings
-- `mpd.address` and `CLERKD_MPD_ADDRESS` are still accepted as compatibility fallbacks
+- `server.bind_to_address` is the primary listener config
+- TCP listeners use `host:port` entries
+- Unix socket listeners use filesystem paths
+- `mpd.address` accepts either `host:port` or a Unix socket path
 - `cache.batch_size` controls batched MPD library fetches during cache rebuilds
 - album ratings are stored by Clerk in `ratings.cache`
 - track ratings are stored in MPD stickers and mirrored into `tracks.cache`
@@ -96,7 +91,7 @@ Default client config:
 
 ```toml
 [api]
-base_url = "local"
+address = "local"
 
 [autostart]
 enabled = true
@@ -120,8 +115,10 @@ track = 5
 
 Notes:
 
-- `api.base_url = "local"` uses the Unix socket transport
-- a remote daemon uses a normal HTTP API URL instead
+- `api.address` accepts:
+  - `local` for the default Clerk Unix socket
+  - a Unix socket path
+  - `host:port` for HTTP API access
 - when the target is local, `clerk-rofi` can auto-start `clerkd`
 
 ### `clerk-musiclist`
@@ -130,7 +127,7 @@ Default exporter config:
 
 ```toml
 [api]
-base_url = "local"
+address = "local"
 
 [upload]
 host = "proteus"
@@ -142,22 +139,23 @@ temp_file = "/tmp/musiclist_albums_only.html"
 
 Notes:
 
-- `clerk-musiclist` reads album data from the Clerk API, not from local cache files
-- `api.base_url = "local"` uses the Unix socket transport
-- remote exports use a normal HTTP API URL instead
+- `api.address` accepts:
+  - `local` for the default Clerk Unix socket
+  - a Unix socket path
+  - `host:port` for HTTP API access
 
 ## API
 
-Default local API value:
+Default local API address:
 
 ```text
 local
 ```
 
-Equivalent remote-style local HTTP URL:
+Remote example:
 
 ```text
-http://localhost:6601/api/v1
+musicbox:6601
 ```
 
 The daemon exposes endpoints under `/api/v1`, including:
@@ -225,8 +223,8 @@ Useful options:
 You can also override the API target at runtime:
 
 ```bash
-clerk-rofi --api-base-url local -a
-clerk-rofi --api-base-url http://musicbox:6601/api/v1 -a
+clerk-rofi --api-address local -a
+clerk-rofi --api-address musicbox:6601 -a
 ```
 
 ## Local Service

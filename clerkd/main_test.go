@@ -5,51 +5,38 @@ import (
 	"testing"
 )
 
-func TestParseHostPortString(t *testing.T) {
+func TestMPDEndpoint(t *testing.T) {
 	tests := []struct {
-		name         string
-		value        string
-		fallbackPort int
-		wantHost     string
-		wantPort     int
+		name        string
+		address     string
+		wantNetwork string
+		wantAddress string
 	}{
-		{name: "empty", value: "", fallbackPort: 0, wantHost: "localhost", wantPort: 6600},
-		{name: "host only", value: "musicbox", fallbackPort: 6600, wantHost: "musicbox", wantPort: 6600},
-		{name: "host and port", value: "musicbox:6601", fallbackPort: 6600, wantHost: "musicbox", wantPort: 6601},
-		{name: "ipv4 and port", value: "127.0.0.1:6602", fallbackPort: 6600, wantHost: "127.0.0.1", wantPort: 6602},
-		{name: "bracketed ipv6 host only", value: "[::1]", fallbackPort: 6600, wantHost: "::1", wantPort: 6600},
-		{name: "bracketed ipv6 and port", value: "[::1]:6603", fallbackPort: 6600, wantHost: "::1", wantPort: 6603},
+		{name: "default", address: "", wantNetwork: "tcp", wantAddress: "localhost:6600"},
+		{name: "tcp", address: "musicbox:6601", wantNetwork: "tcp", wantAddress: "musicbox:6601"},
+		{name: "unix socket", address: "/run/user/1000/mpd/socket", wantNetwork: "unix", wantAddress: "/run/user/1000/mpd/socket"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotHost, gotPort := parseHostPortString(tc.value, tc.fallbackPort)
-			if gotHost != tc.wantHost || gotPort != tc.wantPort {
-				t.Fatalf("parseHostPortString(%q, %d) = (%q, %d), want (%q, %d)", tc.value, tc.fallbackPort, gotHost, gotPort, tc.wantHost, tc.wantPort)
+			gotNetwork, gotAddress := mpdEndpoint(tc.address)
+			if gotNetwork != tc.wantNetwork || gotAddress != tc.wantAddress {
+				t.Fatalf("mpdEndpoint(%q) = (%q, %q), want (%q, %q)", tc.address, gotNetwork, gotAddress, tc.wantNetwork, tc.wantAddress)
 			}
 		})
 	}
 }
 
-func TestMPDAddress(t *testing.T) {
-	tests := []struct {
-		name string
-		host string
-		port int
-		want string
-	}{
-		{name: "defaults", host: "", port: 0, want: "localhost:6600"},
-		{name: "host only", host: "musicbox", port: 0, want: "musicbox:6600"},
-		{name: "host and port", host: "musicbox", port: 6601, want: "musicbox:6601"},
-		{name: "ipv6 host", host: "::1", port: 6600, want: "[::1]:6600"},
+func TestDefaultBindToAddress(t *testing.T) {
+	binds := defaultBindToAddress()
+	if len(binds) != 2 {
+		t.Fatalf("defaultBindToAddress() len = %d, want 2", len(binds))
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := mpdAddress(tc.host, tc.port); got != tc.want {
-				t.Fatalf("mpdAddress(%q, %d) = %q, want %q", tc.host, tc.port, got, tc.want)
-			}
-		})
+	if binds[0] != "0.0.0.0:6601" {
+		t.Fatalf("defaultBindToAddress()[0] = %q, want %q", binds[0], "0.0.0.0:6601")
+	}
+	if binds[1] == "" {
+		t.Fatalf("defaultBindToAddress()[1] should not be empty")
 	}
 }
 

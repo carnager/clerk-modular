@@ -19,11 +19,11 @@ import (
 	"github.com/carnager/clerk-modular/internal/shared"
 )
 
-const defaultLocalAPIBaseURL = shared.LocalAPIConfigValue
+const defaultLocalAPIAddress = shared.LocalAPIConfigValue
 
 type config struct {
 	API struct {
-		BaseURL string `toml:"base_url"`
+		Address string `toml:"address"`
 	} `toml:"api"`
 	Autostart struct {
 		Enabled        bool     `toml:"enabled"`
@@ -103,14 +103,18 @@ func main() {
 		optUpdate   = flag.Bool("u", false, "")
 		optRegen    = flag.Bool("x", false, "")
 		optHelp     = flag.Bool("h", false, "")
-		apiBaseURL  = flag.String("api-base-url", "", "")
+		apiAddress  = flag.String("api-address", "", "")
 		noAutostart = flag.Bool("no-auto-start-local-daemon", false, "")
 	)
 	flag.Parse()
 
-	effectiveURL, implicitLocal, useLocalSocket := resolveAPIBaseURL(cfg, *apiBaseURL)
+	displayAddress := apiAddressInput(cfg, *apiAddress)
+	effectiveURL, implicitLocal, useLocalSocket, socketPath, err := resolveAPIAddress(cfg, *apiAddress)
+	if err != nil {
+		fatal(err)
+	}
 	if *optHelp || !(*optAlbums || *optLatest || *optTracks || *optRandomA || *optRandomT || *optCurrent || *optUpdate || *optRegen) {
-		fmt.Print(helpText(effectiveURL, implicitLocal))
+		fmt.Print(helpText(displayAddress, implicitLocal))
 		return
 	}
 	if *optRegen {
@@ -121,7 +125,7 @@ func main() {
 		return
 	}
 
-	client := newAPIClient(cfg, effectiveURL, implicitLocal && !*noAutostart, useLocalSocket)
+	client := newAPIClient(cfg, effectiveURL, implicitLocal && !*noAutostart, useLocalSocket, socketPath)
 	if err := client.ensureAvailable(); err != nil {
 		fatal(err)
 	}
@@ -189,7 +193,7 @@ func loadConfig() (config, string, error) {
 	autostart, _ := raw["autostart"].(map[string]any)
 	ui, _ := raw["ui"].(map[string]any)
 	columns, _ := raw["columns"].(map[string]any)
-	cfg.API.BaseURL = stringify(api["base_url"])
+	cfg.API.Address = stringify(api["address"])
 	cfg.Autostart.Enabled = boolFromAny(autostart["enabled"], true)
 	cfg.Autostart.SystemdUnit = stringify(autostart["systemd_unit"])
 	cfg.Autostart.Command = stringSlice(autostart["command"])
@@ -209,7 +213,7 @@ func loadConfig() (config, string, error) {
 
 func defaultConfigText() string {
 	return `[api]
-base_url = "local"
+address = "local"
 
 [autostart]
 enabled = true
@@ -233,8 +237,8 @@ track = 5
 }
 
 func applyDefaults(cfg *config) {
-	if cfg.API.BaseURL == "" {
-		cfg.API.BaseURL = defaultLocalAPIBaseURL
+	if cfg.API.Address == "" {
+		cfg.API.Address = defaultLocalAPIAddress
 	}
 	if cfg.Autostart.SystemdUnit == "" {
 		cfg.Autostart.SystemdUnit = "clerkd.service"
@@ -274,19 +278,25 @@ func applyDefaults(cfg *config) {
 	}
 }
 
-func resolveAPIBaseURL(cfg config, override string) (string, bool, bool) {
-	base := strings.TrimSpace(override)
-	if base == "" {
-		base = strings.TrimSpace(cfg.API.BaseURL)
+func apiAddressInput(cfg config, override string) string {
+	address := strings.TrimSpace(override)
+	if address == "" {
+		address = strings.TrimSpace(cfg.API.Address)
 	}
-	if base == "" || shared.IsLocalAPIConfigValue(base) {
-		base = defaultLocalAPIBaseURL
+	if address == "" {
+		address = defaultLocalAPIAddress
 	}
-	if shared.IsLocalAPIConfigValue(base) {
-		return shared.LocalAPIBaseURL, true, true
+	return address
+}
+
+func resolveAPIAddress(cfg config, override string) (string, bool, bool, string, error) {
+	address := apiAddressInput(cfg, override)
+	baseURL, useLocalSocket, socketPath, err := shared.APIBaseURLFromAddress(address)
+	if err != nil {
+		return "", false, false, "", err
 	}
-	base = strings.TrimRight(base, "/")
-	return base, shared.IsLoopbackAPIBaseURL(base), false
+	implicitLocal := useLocalSocket || shared.IsLoopbackTCPAddress(address)
+	return baseURL, implicitLocal, useLocalSocket, socketPath, nil
 }
 
 func helpText(apiBaseURL string, autoStart bool) string {
@@ -294,7 +304,7 @@ func helpText(apiBaseURL string, autoStart bool) string {
 	if autoStart {
 		auto = "yes"
 	}
-	return fmt.Sprintf(`Usage: clerk-rofi [option] [--api-base-url URL] [--no-auto-start-local-daemon]
+	return fmt.Sprintf(`Usage: clerk-rofi [option] [--api-address ADDRESS] [--no-auto-start-local-daemon]
  -a  Add Albums
  -l  Add Latest Albums
  -t  Add Tracks
@@ -306,15 +316,15 @@ func helpText(apiBaseURL string, autoStart bool) string {
  -h  Show This Help
 
 Defaults:
- api.base_url = %s
+ api.address = %s
  autostart.enabled = %s
 `, apiBaseURL, auto)
 }
 
-func newAPIClient(cfg config, baseURL string, autoStart bool, useLocalSocket bool) *apiClient {
+func newAPIClient(cfg config, baseURL string, autoStart bool, useLocalSocket bool, socketPath string) *apiClient {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	if useLocalSocket {
-		httpClient = shared.NewLocalHTTPClient(10*time.Second, shared.DefaultSocketPath())
+		httpClient = shared.NewLocalHTTPClient(10*time.Second, socketPath)
 	}
 	return &apiClient{
 		baseURL:              baseURL,
@@ -739,6 +749,11 @@ func stringify(value any) string {
 
 func stringSlice(value any) []string {
 	switch v := value.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return []string{v}
 	case []string:
 		return append([]string(nil), v...)
 	case []any:

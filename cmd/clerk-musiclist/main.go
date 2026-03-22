@@ -18,7 +18,7 @@ import (
 
 type config struct {
 	API struct {
-		BaseURL string `toml:"base_url"`
+		Address string `toml:"address"`
 	} `toml:"api"`
 	Upload struct {
 		Host string `toml:"host"`
@@ -59,7 +59,7 @@ func main() {
 	tempHTMLFile := cfg.Output.TempFile
 
 	logf(start, "Loading albums from Clerk API...")
-	albumsRaw, err := fetchAlbums(cfg.API.BaseURL)
+	albumsRaw, err := fetchAlbums(cfg.API.Address)
 	if err != nil {
 		fatal(start, fmt.Errorf("fetch albums: %w", err))
 	}
@@ -123,7 +123,7 @@ func loadConfig() (config, error) {
 	api, _ := raw["api"].(map[string]any)
 	upload, _ := raw["upload"].(map[string]any)
 	output, _ := raw["output"].(map[string]any)
-	cfg.API.BaseURL = stringify(api["base_url"])
+	cfg.API.Address = stringify(api["address"])
 	cfg.Upload.Host = stringify(upload["host"])
 	cfg.Upload.Path = stringify(upload["path"])
 	cfg.Output.TempFile = stringify(output["temp_file"])
@@ -133,7 +133,7 @@ func loadConfig() (config, error) {
 
 func defaultConfigText() string {
 	return `[api]
-base_url = "local"
+address = "local"
 
 [upload]
 host = "proteus"
@@ -145,8 +145,8 @@ temp_file = "/tmp/musiclist_albums_only.html"
 }
 
 func applyDefaults(cfg *config) {
-	if cfg.API.BaseURL == "" {
-		cfg.API.BaseURL = shared.LocalAPIConfigValue
+	if cfg.API.Address == "" {
+		cfg.API.Address = shared.LocalAPIConfigValue
 	}
 	if cfg.Upload.Host == "" {
 		cfg.Upload.Host = "proteus"
@@ -159,17 +159,14 @@ func applyDefaults(cfg *config) {
 	}
 }
 
-func fetchAlbums(baseURL string) ([]map[string]any, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
-		return nil, fmt.Errorf("api.base_url is empty")
+func fetchAlbums(address string) ([]map[string]any, error) {
+	baseURL, useLocalSocket, socketPath, err := shared.APIBaseURLFromAddress(address)
+	if err != nil {
+		return nil, err
 	}
-	if shared.IsLocalAPIConfigValue(baseURL) {
-		baseURL = shared.LocalAPIBaseURL
-		client = shared.NewLocalHTTPClient(30*time.Second, shared.DefaultSocketPath())
-	} else {
-		baseURL = strings.TrimRight(baseURL, "/")
+	client := &http.Client{Timeout: 30 * time.Second}
+	if useLocalSocket {
+		client = shared.NewLocalHTTPClient(30*time.Second, socketPath)
 	}
 
 	resp, err := client.Get(baseURL + "/albums")

@@ -21,20 +21,11 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-const (
-	defaultHost = "0.0.0.0"
-	defaultPort = 6601
-)
-
 type config struct {
 	Server struct {
-		Host       string `toml:"host"`
-		Port       int    `toml:"port"`
-		SocketPath string `toml:"socket_path"`
+		BindToAddress []string `toml:"bind_to_address"`
 	} `toml:"server"`
 	MPD struct {
-		Host    string `toml:"host"`
-		Port    int    `toml:"port"`
 		Address string `toml:"address"`
 	} `toml:"mpd"`
 	Random struct {
@@ -58,7 +49,6 @@ type paths struct {
 type app struct {
 	cfg    config
 	paths  paths
-	addr   string
 	logger *log.Logger
 }
 
@@ -72,7 +62,6 @@ func main() {
 	a := &app{
 		cfg:    cfg,
 		paths:  pathCfg,
-		addr:   fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		logger: logger,
 	}
 
@@ -124,11 +113,7 @@ func loadConfig() (config, paths, error) {
 	mpdSection, _ := raw["mpd"].(map[string]any)
 	random, _ := raw["random"].(map[string]any)
 	cache, _ := raw["cache"].(map[string]any)
-	cfg.Server.Host = stringify(server["host"])
-	cfg.Server.Port = intFromAny(server["port"], defaultPort)
-	cfg.Server.SocketPath = stringify(server["socket_path"])
-	cfg.MPD.Host = stringify(mpdSection["host"])
-	cfg.MPD.Port = intFromAny(mpdSection["port"], 6600)
+	cfg.Server.BindToAddress = stringSlice(server["bind_to_address"])
 	cfg.MPD.Address = stringify(mpdSection["address"])
 	cfg.Random.Tracks = intFromAny(random["tracks"], 20)
 	cfg.Random.ArtistTag = stringify(random["artist_tag"])
@@ -139,12 +124,10 @@ func loadConfig() (config, paths, error) {
 
 func defaultDaemonConfig() string {
 	return `[server]
-host = "0.0.0.0"
-port = 6601
+bind_to_address = ["0.0.0.0:6601", "` + shared.DefaultSocketPath() + `"]
 
 [mpd]
-host = "localhost"
-port = 6600
+address = "localhost:6600"
 
 [random]
 tracks = 20
@@ -156,29 +139,8 @@ batch_size = 10000
 }
 
 func applyDefaults(cfg *config) {
-	if cfg.Server.Host == "" {
-		cfg.Server.Host = defaultHost
-	}
-	if cfg.Server.Port <= 0 {
-		cfg.Server.Port = defaultPort
-	}
-	if cfg.Server.SocketPath == "" {
-		cfg.Server.SocketPath = shared.DefaultSocketPath()
-	}
-	if cfg.MPD.Address != "" {
-		host, port := parseHostPortString(cfg.MPD.Address, 6600)
-		if cfg.MPD.Host == "" {
-			cfg.MPD.Host = host
-		}
-		if cfg.MPD.Port <= 0 {
-			cfg.MPD.Port = port
-		}
-	}
-	if cfg.MPD.Host == "" {
-		cfg.MPD.Host = "localhost"
-	}
-	if cfg.MPD.Port <= 0 {
-		cfg.MPD.Port = 6600
+	if cfg.MPD.Address == "" {
+		cfg.MPD.Address = "localhost:6600"
 	}
 	if cfg.Random.Tracks <= 0 {
 		cfg.Random.Tracks = 20
@@ -189,60 +151,76 @@ func applyDefaults(cfg *config) {
 	if cfg.Cache.BatchSize <= 0 {
 		cfg.Cache.BatchSize = 10000
 	}
-	if envHost := os.Getenv("CLERKD_HOST"); envHost != "" {
-		cfg.Server.Host = envHost
-	}
-	if envPort := os.Getenv("CLERKD_PORT"); envPort != "" {
-		cfg.Server.Port = intFromAny(envPort, cfg.Server.Port)
-	}
-	if envSocketPath := os.Getenv("CLERKD_SOCKET_PATH"); envSocketPath != "" {
-		cfg.Server.SocketPath = envSocketPath
-	}
-	if envMPDHost := os.Getenv("CLERKD_MPD_HOST"); envMPDHost != "" {
-		cfg.MPD.Host = envMPDHost
-	}
-	if envMPDPort := os.Getenv("CLERKD_MPD_PORT"); envMPDPort != "" {
-		cfg.MPD.Port = intFromAny(envMPDPort, cfg.MPD.Port)
+	if envBind := os.Getenv("CLERKD_BIND_TO_ADDRESS"); envBind != "" {
+		cfg.Server.BindToAddress = splitAndTrim(envBind, ",")
 	}
 	if envMPDAddress := os.Getenv("CLERKD_MPD_ADDRESS"); envMPDAddress != "" {
-		host, port := parseHostPortString(envMPDAddress, cfg.MPD.Port)
-		cfg.MPD.Host = host
-		cfg.MPD.Port = port
+		cfg.MPD.Address = strings.TrimSpace(envMPDAddress)
+	}
+	if len(cfg.Server.BindToAddress) == 0 {
+		cfg.Server.BindToAddress = defaultBindToAddress()
 	}
 }
 
 func (a *app) serve() error {
 	handler := a.routes()
-
-	tcpListener, err := net.Listen("tcp", a.addr)
+	listeners, err := a.listenConfigured()
 	if err != nil {
 		return err
 	}
-	a.logger.Printf("serving tcp on %s", a.addr)
 
-	socketListener, err := a.listenUnixSocket()
-	if err != nil {
-		_ = tcpListener.Close()
-		return err
+	errCh := make(chan error, len(listeners))
+	for _, listener := range listeners {
+		l := listener
+		go func() {
+			errCh <- http.Serve(l, handler)
+		}()
 	}
-	a.logger.Printf("serving unix socket on %s", a.cfg.Server.SocketPath)
-
-	errCh := make(chan error, 2)
-	go func() {
-		errCh <- http.Serve(tcpListener, handler)
-	}()
-	go func() {
-		errCh <- http.Serve(socketListener, handler)
-	}()
 
 	err = <-errCh
-	_ = tcpListener.Close()
-	_ = socketListener.Close()
+	for _, listener := range listeners {
+		_ = listener.Close()
+	}
 	return err
 }
 
-func (a *app) listenUnixSocket() (net.Listener, error) {
-	socketPath := a.cfg.Server.SocketPath
+func (a *app) listenConfigured() ([]net.Listener, error) {
+	listeners := make([]net.Listener, 0, len(a.cfg.Server.BindToAddress))
+	for _, bind := range a.cfg.Server.BindToAddress {
+		listener, err := a.listenAddress(bind)
+		if err != nil {
+			for _, existing := range listeners {
+				_ = existing.Close()
+			}
+			return nil, err
+		}
+		listeners = append(listeners, listener)
+	}
+	return listeners, nil
+}
+
+func (a *app) listenAddress(bind string) (net.Listener, error) {
+	bind = strings.TrimSpace(bind)
+	if bind == "" {
+		return nil, fmt.Errorf("empty bind_to_address entry")
+	}
+	if isUnixBindAddress(bind) {
+		listener, err := listenUnixSocket(bind)
+		if err != nil {
+			return nil, err
+		}
+		a.logger.Printf("serving unix socket on %s", bind)
+		return listener, nil
+	}
+	listener, err := net.Listen("tcp", bind)
+	if err != nil {
+		return nil, err
+	}
+	a.logger.Printf("serving tcp on %s", bind)
+	return listener, nil
+}
+
+func listenUnixSocket(socketPath string) (net.Listener, error) {
 	if socketPath == "" {
 		return nil, fmt.Errorf("empty socket path")
 	}
@@ -261,6 +239,10 @@ func (a *app) listenUnixSocket() (net.Listener, error) {
 		return nil, err
 	}
 	return listener, nil
+}
+
+func isUnixBindAddress(bind string) bool {
+	return strings.Contains(bind, "/")
 }
 
 func (a *app) routes() http.Handler {
@@ -819,39 +801,30 @@ func (a *app) handleCurrentTrackRatingPost(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *app) dialMPD() (*mpd.Client, error) {
-	client, err := mpd.Dial("tcp", mpdAddress(a.cfg.MPD.Host, a.cfg.MPD.Port))
+	network, address := mpdEndpoint(a.cfg.MPD.Address)
+	client, err := mpd.Dial(network, address)
 	if err != nil {
 		return nil, err
 	}
 	return client, nil
 }
 
-func mpdAddress(host string, port int) string {
-	if host == "" {
-		host = "localhost"
+func mpdEndpoint(address string) (network, endpoint string) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		address = "localhost:6600"
 	}
-	if port <= 0 {
-		port = 6600
+	if shared.IsUnixAddress(address) {
+		return "unix", address
 	}
-	return net.JoinHostPort(host, strconv.Itoa(port))
+	return "tcp", address
 }
 
-func parseHostPortString(value string, fallbackPort int) (string, int) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "localhost", max(fallbackPort, 6600)
+func defaultBindToAddress() []string {
+	return []string{
+		"0.0.0.0:6601",
+		shared.DefaultSocketPath(),
 	}
-	host, portText, err := net.SplitHostPort(value)
-	if err == nil {
-		return host, intFromAny(portText, max(fallbackPort, 6600))
-	}
-	if strings.Count(value, ":") == 0 {
-		return value, max(fallbackPort, 6600)
-	}
-	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
-		return strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"), max(fallbackPort, 6600)
-	}
-	return value, max(fallbackPort, 6600)
 }
 
 func (a *app) createCache() error {
@@ -1435,6 +1408,11 @@ func findManyByID(items []map[string]any, ids []string) []map[string]any {
 
 func stringSlice(value any) []string {
 	switch v := value.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return []string{v}
 	case []string:
 		return v
 	case []any:
@@ -1548,6 +1526,18 @@ func getenvIntDefault(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func splitAndTrim(value, sep string) []string {
+	parts := strings.Split(value, sep)
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func intFromAny(value any, fallback int) int {

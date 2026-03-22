@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,13 +20,15 @@ func IsLocalAPIConfigValue(value string) bool {
 	return strings.EqualFold(strings.TrimSpace(value), LocalAPIConfigValue)
 }
 
-func IsLoopbackAPIBaseURL(base string) bool {
-	u, err := url.Parse(base)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	host := u.Hostname()
-	if host == "" {
+func IsUnixAddress(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.Contains(value, "/") || strings.HasPrefix(value, ".")
+}
+
+func IsLoopbackTCPAddress(value string) bool {
+	value = strings.TrimSpace(value)
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
 		return false
 	}
 	if strings.EqualFold(host, "localhost") {
@@ -40,6 +41,28 @@ func IsLoopbackAPIBaseURL(base string) bool {
 func DefaultSocketPath() string {
 	runtimeDir := Getenv("XDG_RUNTIME_DIR", filepath.Join(os.TempDir(), fmt.Sprintf("clerk-%d", os.Getuid())))
 	return filepath.Join(runtimeDir, "clerk", "clerkd.sock")
+}
+
+func ResolveSocketPath(address string) string {
+	address = strings.TrimSpace(address)
+	if IsLocalAPIConfigValue(address) {
+		return DefaultSocketPath()
+	}
+	return address
+}
+
+func APIBaseURLFromAddress(address string) (baseURL string, useLocalSocket bool, socketPath string, err error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "", false, "", fmt.Errorf("api.address is empty")
+	}
+	if IsLocalAPIConfigValue(address) {
+		return LocalAPIBaseURL, true, ResolveSocketPath(address), nil
+	}
+	if IsUnixAddress(address) {
+		return LocalAPIBaseURL, true, ResolveSocketPath(address), nil
+	}
+	return "http://" + address + "/api/v1", false, "", nil
 }
 
 func NewLocalHTTPClient(timeout time.Duration, socketPath string) *http.Client {
