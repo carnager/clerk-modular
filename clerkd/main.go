@@ -472,27 +472,27 @@ func (a *app) handleAddAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 	cachePath, err := a.albumCachePath(listMode)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	albums, err := a.readMapSlice(cachePath)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	album := findByID(albums, r.PathValue("album_id"))
 	if album == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Album not found"})
+		a.writeError(w, r, http.StatusNotFound, "Album not found")
 		return
 	}
 	client, err := a.dialMPD()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer client.Close()
 	if err := addAlbumsToPlaylist(client, []map[string]any{album}, mode); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Album added to playlist successfully."})
@@ -506,22 +506,22 @@ func (a *app) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 	mode := normalizePlaylistMode(stringify(body["mode"]))
 	tracks, err := a.readMapSlice(a.paths.TracksCacheFile)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	track := findByID(tracks, r.PathValue("track_id"))
 	if track == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Track not found"})
+		a.writeError(w, r, http.StatusNotFound, "Track not found")
 		return
 	}
 	client, err := a.dialMPD()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer client.Close()
 	if err := addTracksToPlaylist(client, []map[string]any{track}, mode); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Track added to playlist successfully."})
@@ -534,7 +534,7 @@ func (a *app) handleAddAlbums(w http.ResponseWriter, r *http.Request) {
 	}
 	ids := stringSlice(body["album_ids"])
 	if len(ids) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "album_ids must be a non-empty list"})
+		a.writeError(w, r, http.StatusBadRequest, "album_ids must be a non-empty list")
 		return
 	}
 	mode := normalizePlaylistMode(stringify(body["mode"]))
@@ -544,27 +544,27 @@ func (a *app) handleAddAlbums(w http.ResponseWriter, r *http.Request) {
 	}
 	cachePath, err := a.albumCachePath(listMode)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	albums, err := a.readMapSlice(cachePath)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	selected := findManyByID(albums, ids)
 	if len(selected) != len(ids) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Some albums not found"})
+		a.writeError(w, r, http.StatusNotFound, "Some albums not found")
 		return
 	}
 	client, err := a.dialMPD()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer client.Close()
 	if err := addAlbumsToPlaylist(client, selected, mode); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": fmt.Sprintf("%d albums added to playlist successfully", len(selected))})
@@ -577,28 +577,28 @@ func (a *app) handleAddTracks(w http.ResponseWriter, r *http.Request) {
 	}
 	ids := stringSlice(body["track_ids"])
 	if len(ids) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "track_ids must be a non-empty list"})
+		a.writeError(w, r, http.StatusBadRequest, "track_ids must be a non-empty list")
 		return
 	}
 	mode := normalizePlaylistMode(stringify(body["mode"]))
 	tracks, err := a.readMapSlice(a.paths.TracksCacheFile)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	selected := findManyByID(tracks, ids)
 	if len(selected) != len(ids) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Some tracks not found"})
+		a.writeError(w, r, http.StatusNotFound, "Some tracks not found")
 		return
 	}
 	client, err := a.dialMPD()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer client.Close()
 	if err := addTracksToPlaylist(client, selected, mode); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		a.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": fmt.Sprintf("%d tracks added to playlist successfully", len(selected))})
@@ -1033,13 +1033,17 @@ func (a *app) updateTrackRating(client *mpd.Client, track map[string]any, rating
 	}
 }
 
+type albumFinder interface {
+	Find(args ...string) ([]mpd.Attrs, error)
+}
+
 func addAlbumsToPlaylist(client *mpd.Client, albums []map[string]any, mode string) error {
 	pos, err := preparePlaylist(client, mode)
 	if err != nil {
 		return err
 	}
 	for _, album := range albums {
-		attrs, err := client.Find("albumartist", stringify(album["albumartist"]), "album", stringify(album["album"]), "date", stringify(album["date"]))
+		attrs, err := findAlbumTracks(client, album)
 		if err != nil {
 			return err
 		}
@@ -1073,6 +1077,43 @@ func addAlbumsToPlaylist(client *mpd.Client, albums []map[string]any, mode strin
 		return client.Play(-1)
 	}
 	return nil
+}
+
+func findAlbumTracks(client albumFinder, album map[string]any) ([]mpd.Attrs, error) {
+	artist := stringify(album["albumartist"])
+	name := stringify(album["album"])
+	date := stringify(album["date"])
+	displayArtist := artist
+	displayName := name
+	displayDate := date
+	if displayArtist == "" {
+		displayArtist = "Unknown Artist"
+	}
+	if displayName == "" {
+		displayName = "Unknown Album"
+	}
+	if displayDate == "" {
+		displayDate = "0000"
+	}
+
+	queries := [][]string{
+		{"albumartist", artist, "album", name, "date", date},
+	}
+	if artist != "" {
+		queries = append(queries, []string{"artist", artist, "album", name, "date", date})
+	}
+
+	for _, args := range queries {
+		attrs, err := client.Find(args...)
+		if err != nil {
+			return nil, err
+		}
+		if len(attrs) > 0 {
+			return attrs, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no tracks found in MPD for %s - %s (%s)", displayArtist, displayName, displayDate)
 }
 
 func addTracksToPlaylist(client *mpd.Client, tracks []map[string]any, mode string) error {
@@ -1460,6 +1501,11 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (a *app) writeError(w http.ResponseWriter, r *http.Request, status int, message string) {
+	a.logger.Printf("%s %s -> %d: %s", r.Method, r.URL.Path, status, message)
+	writeJSON(w, status, map[string]string{"error": message})
 }
 
 func stringify(value any) string {

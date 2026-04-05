@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/carnager/clerk-modular/internal/shared"
@@ -45,5 +46,34 @@ func TestResolveAPIBaseURLDetectsLocalEndpoints(t *testing.T) {
 				t.Fatalf("resolveAPIAddress() useSocket = %v, want %v", gotUseSocket, tc.wantUseSocket)
 			}
 		})
+	}
+}
+
+func TestDecodeAPIMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "error field", body: `{"error":"no tracks found in MPD"}`, want: "no tracks found in MPD"},
+		{name: "message field", body: `{"message":"Cache updated"}`, want: "Cache updated"},
+		{name: "not json", body: `plain error`, want: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := decodeAPIMessage([]byte(tc.body)); got != tc.want {
+				t.Fatalf("decodeAPIMessage(%q) = %q, want %q", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAPIErrorMessagePrefersStructuredError(t *testing.T) {
+	req := httptest.NewRequest("POST", "http://musicbox:6601/api/v1/playlist/add/albums", nil)
+	got := apiErrorMessage(req, 500, []byte(`{"error":"no tracks found in MPD for Example Artist - Example Album (2024)"}`))
+	want := "no tracks found in MPD for Example Artist - Example Album (2024)"
+	if got != want {
+		t.Fatalf("apiErrorMessage() = %q, want %q", got, want)
 	}
 }

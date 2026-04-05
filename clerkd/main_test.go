@@ -1,8 +1,12 @@
 package main
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/fhs/gompd/v2/mpd"
 )
 
 func TestMPDEndpoint(t *testing.T) {
@@ -103,5 +107,76 @@ func TestUpdateTrackCacheRatingIgnoresMissingFile(t *testing.T) {
 	}
 	if got := stringify(tracks[0]["rating"]); got != "3" {
 		t.Fatalf("track[0] rating = %q, want unchanged %q", got, "3")
+	}
+}
+
+type fakeAlbumFinder struct {
+	findCalls [][]string
+	results   map[string][]mpd.Attrs
+	err       error
+}
+
+func (f *fakeAlbumFinder) Find(args ...string) ([]mpd.Attrs, error) {
+	f.findCalls = append(f.findCalls, append([]string(nil), args...))
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.results[strings.Join(args, "\x00")], nil
+}
+
+func TestFindAlbumTracksFallsBackToArtistTag(t *testing.T) {
+	album := map[string]any{
+		"albumartist": "Example Artist",
+		"album":       "Example Album",
+		"date":        "2024",
+	}
+	finder := &fakeAlbumFinder{
+		results: map[string][]mpd.Attrs{
+			strings.Join([]string{"artist", "Example Artist", "album", "Example Album", "date", "2024"}, "\x00"): {
+				{"file": "music/example.flac"},
+			},
+		},
+	}
+
+	attrs, err := findAlbumTracks(finder, album)
+	if err != nil {
+		t.Fatalf("findAlbumTracks() error = %v", err)
+	}
+	if len(attrs) != 1 || attrs[0]["file"] != "music/example.flac" {
+		t.Fatalf("findAlbumTracks() attrs = %#v, want fallback artist match", attrs)
+	}
+	if len(finder.findCalls) != 2 {
+		t.Fatalf("Find() call count = %d, want 2", len(finder.findCalls))
+	}
+}
+
+func TestFindAlbumTracksErrorsWhenNoTracksFound(t *testing.T) {
+	album := map[string]any{
+		"albumartist": "Missing Artist",
+		"album":       "Missing Album",
+		"date":        "1999",
+	}
+	finder := &fakeAlbumFinder{results: map[string][]mpd.Attrs{}}
+
+	_, err := findAlbumTracks(finder, album)
+	if err == nil {
+		t.Fatal("findAlbumTracks() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "no tracks found in MPD for Missing Artist - Missing Album (1999)") {
+		t.Fatalf("findAlbumTracks() error = %q, want missing album message", err.Error())
+	}
+}
+
+func TestFindAlbumTracksPropagatesMPDErrors(t *testing.T) {
+	finder := &fakeAlbumFinder{err: errors.New("mpd down")}
+	album := map[string]any{
+		"albumartist": "Example Artist",
+		"album":       "Example Album",
+		"date":        "2024",
+	}
+
+	_, err := findAlbumTracks(finder, album)
+	if err == nil || err.Error() != "mpd down" {
+		t.Fatalf("findAlbumTracks() error = %v, want %q", err, "mpd down")
 	}
 }

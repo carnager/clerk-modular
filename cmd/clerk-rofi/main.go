@@ -110,7 +110,7 @@ func main() {
 	displayAddress := apiAddressInput(cfg, *apiAddress)
 	effectiveURL, implicitLocal, useLocalSocket, socketPath, err := resolveAPIAddress(cfg, *apiAddress)
 	if err != nil {
-		fatal(err)
+		fatalWithUI(cfg, err)
 	}
 	if *optHelp || !(*optAlbums || *optLatest || *optTracks || *optRandomA || *optRandomT || *optCurrent || *optUpdate || *optRegen) {
 		fmt.Print(helpText(displayAddress, implicitLocal))
@@ -118,7 +118,7 @@ func main() {
 	}
 	if *optRegen {
 		if err := os.WriteFile(cfgPath, []byte(defaultConfigText()), 0o644); err != nil {
-			fatal(err)
+			fatalWithUI(cfg, err)
 		}
 		fmt.Printf("Wrote default config to %s\n", cfgPath)
 		return
@@ -126,37 +126,37 @@ func main() {
 
 	client := newAPIClient(cfg, effectiveURL, implicitLocal && !*noAutostart, useLocalSocket, socketPath)
 	if err := client.ensureAvailable(); err != nil {
-		fatal(err)
+		fatalWithUI(cfg, err)
 	}
 
 	switch {
 	case *optAlbums:
 		if err := addAlbumUI(cfg, client, "album"); err != nil {
-			fatal(err)
+			fatalWithUI(cfg, err)
 		}
 	case *optLatest:
 		if err := addAlbumUI(cfg, client, "latest"); err != nil {
-			fatal(err)
+			fatalWithUI(cfg, err)
 		}
 	case *optTracks:
 		if err := addTrackUI(cfg, client); err != nil {
-			fatal(err)
+			fatalWithUI(cfg, err)
 		}
 	case *optRandomA:
 		if err := client.post("playback/random/album", nil, nil); err != nil {
-			fatal(err)
+			fatalWithUI(cfg, err)
 		}
 	case *optRandomT:
 		if err := client.post("playback/random/tracks", nil, nil); err != nil {
-			fatal(err)
+			fatalWithUI(cfg, err)
 		}
 	case *optCurrent:
 		if err := currentTrackUI(cfg, client); err != nil {
-			fatal(err)
+			fatalWithUI(cfg, err)
 		}
 	case *optUpdate:
 		if err := client.post("cache/update", nil, nil); err != nil {
-			fatal(err)
+			fatalWithUI(cfg, err)
 		}
 	}
 }
@@ -164,6 +164,14 @@ func main() {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
+}
+
+func fatalWithUI(cfg config, err error) {
+	if err == nil {
+		return
+	}
+	_ = showErrorMenu(cfg, err)
+	fatal(err)
 }
 
 func loadConfig() (config, string, error) {
@@ -437,13 +445,38 @@ func (c *apiClient) do(req *http.Request, out any, retryOnConnectError bool) err
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("http %d for %s - %s", resp.StatusCode, req.URL.String(), strings.TrimSpace(string(body)))
+		return errors.New(apiErrorMessage(req, resp.StatusCode, body))
 	}
 	if out == nil {
 		io.Copy(io.Discard, resp.Body)
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func apiErrorMessage(req *http.Request, status int, body []byte) string {
+	if message := decodeAPIMessage(body); message != "" {
+		return message
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return fmt.Sprintf("http %d for %s", status, req.URL.String())
+	}
+	return fmt.Sprintf("http %d for %s - %s", status, req.URL.String(), text)
+}
+
+func decodeAPIMessage(body []byte) string {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	if message := textOr(payload["error"], ""); message != "" {
+		return message
+	}
+	if message := textOr(payload["message"], ""); message != "" {
+		return message
+	}
+	return ""
 }
 
 func addAlbumUI(cfg config, client *apiClient, mode string) error {
@@ -623,6 +656,15 @@ func runMenu(cfg config, lines []string) ([]string, error) {
 		return nil, nil
 	}
 	return outLines, nil
+}
+
+func showErrorMenu(cfg config, err error) error {
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return nil
+	}
+	_, runErr := runMenu(cfg, []string{"Error: " + message, "Press Enter or Escape to dismiss"})
+	return runErr
 }
 
 func runSingleMenu(cfg config, lines []string) (string, error) {
