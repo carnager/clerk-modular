@@ -1,12 +1,12 @@
 # Maintainer: Rasmus Steinke <rasi at xssn dot at>
 pkgname=('clerkd' 'clerk-rofi' 'clerk-musiclist')
-pkgver=1.0
+pkgver=0.4.1
 pkgrel=1
 arch=('x86_64')
 url="https://example.com/clerk"
 license=('MIT')
 makedepends=('go')
-source=("git+https://github.com/carnager/clerk-modular.git")
+source=("git+https://github.com/carnager/clerk-modular.git#tag=${pkgver}")
 sha256sums=('SKIP')
 
 build() {
