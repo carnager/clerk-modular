@@ -200,6 +200,15 @@ go build ./cmd/clerk-rofi
 go build ./cmd/clerk-musiclist
 ```
 
+Nix flake builds:
+
+```bash
+nix build .#clerkd
+nix build .#clerk-rofi
+nix build .#clerk-musiclist
+nix build
+```
+
 ## Running
 
 Run the daemon from the repository root:
