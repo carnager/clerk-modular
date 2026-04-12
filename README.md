@@ -44,6 +44,7 @@ Data files written by the daemon:
 - `~/.local/share/clerk/tracks.cache`
 - `~/.local/share/clerk/latest.cache`
 - `~/.local/share/clerk/ratings.cache`
+- `~/.local/share/clerk/cache.state`
 
 XDG base directory variables are respected:
 
@@ -82,8 +83,10 @@ Notes:
 - Unix socket listeners use filesystem paths
 - `mpd.address` accepts either `host:port` or a Unix socket path
 - `cache.batch_size` controls batched MPD library fetches during cache rebuilds
+- `clerkd` watches MPD idle `database` events and rebuilds its caches automatically after MPD finishes a database update
 - album ratings are stored by Clerk in `ratings.cache`
 - track ratings are stored in MPD stickers and mirrored into `tracks.cache`
+- `cache.state` tracks the current cache version and update timestamp for clients
 
 ### `clerk-rofi`
 
@@ -130,8 +133,8 @@ Default exporter config:
 address = "local"
 
 [upload]
-host = "proteus"
-path = "/srv/http/list"
+host = ""
+path = ""
 
 [output]
 temp_file = "/tmp/musiclist_albums_only.html"
@@ -143,6 +146,7 @@ Notes:
   - `local` for the default Clerk Unix socket
   - a Unix socket path
   - `host:port` for HTTP API access
+- `upload.host` and `upload.path` must be set explicitly before publishing
 
 ## API
 
@@ -164,11 +168,21 @@ The daemon exposes endpoints under `/api/v1`, including:
 - `GET /albums`
 - `GET /latest_albums`
 - `GET /tracks`
+- `GET /cache/status`
 - album rating endpoints
 - track rating endpoints
 - playlist add/insert/replace endpoints
 - random playback endpoints
 - `POST /cache/update`
+
+Client refresh contract:
+
+- `GET /cache/status` returns the current cache `version` and `updated_at`
+- `GET /albums`, `GET /latest_albums`, and `GET /tracks` also return:
+  - `X-Clerk-Cache-Version`
+  - `X-Clerk-Cache-Updated-At`
+  - `ETag`
+- clients should compare cache `version` values and re-fetch list data when the version changes
 
 ## Building
 
