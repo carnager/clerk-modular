@@ -53,6 +53,15 @@ type cacheState struct {
 	UpdatedAt string `json:"updated_at" msgpack:"updated_at"`
 }
 
+type cacheStatus struct {
+	Version        int64  `json:"version"`
+	UpdatedAt      string `json:"updated_at"`
+	Stale          bool   `json:"stale"`
+	MPDConnected   bool   `json:"mpd_connected"`
+	MPDUpdating    bool   `json:"mpd_updating"`
+	MPDDBUpdatedAt string `json:"mpd_db_updated_at,omitempty"`
+}
+
 type app struct {
 	cfg       config
 	paths     paths
@@ -389,13 +398,16 @@ func (a *app) handleTracks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleCacheStatus(w http.ResponseWriter, r *http.Request) {
-	state, err := a.loadCacheState()
+	status, err := a.loadCacheStatus()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	a.writeCacheStateHeaders(w, state)
-	writeJSON(w, http.StatusOK, state)
+	a.writeCacheStateHeaders(w, cacheState{
+		Version:   status.Version,
+		UpdatedAt: status.UpdatedAt,
+	})
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (a *app) handleAlbumRatingGet(w http.ResponseWriter, r *http.Request) {
@@ -1433,6 +1445,20 @@ func newCacheState(updatedAt time.Time) cacheState {
 	}
 }
 
+func cacheStatusFromState(state cacheState) cacheStatus {
+	return cacheStatus{
+		Version:   state.Version,
+		UpdatedAt: state.UpdatedAt,
+	}
+}
+
+func cacheIsStale(state cacheState, dbUpdateUnix int64) bool {
+	if dbUpdateUnix <= 0 {
+		return false
+	}
+	return state.Version < time.Unix(dbUpdateUnix, 0).UTC().UnixNano()
+}
+
 func (a *app) deriveCacheState() (cacheState, error) {
 	paths := []string{a.paths.AlbumCacheFile, a.paths.TracksCacheFile, a.paths.LatestCacheFile}
 	var newest time.Time
@@ -1470,6 +1496,40 @@ func (a *app) loadCacheState() (cacheState, error) {
 		return a.deriveCacheState()
 	}
 	return state, nil
+}
+
+func (a *app) loadCacheStatus() (cacheStatus, error) {
+	state, err := a.loadCacheState()
+	if err != nil {
+		return cacheStatus{}, err
+	}
+
+	status := cacheStatusFromState(state)
+	client, err := a.dialMPD()
+	if err != nil {
+		return status, nil
+	}
+	defer client.Close()
+
+	status.MPDConnected = true
+
+	mpdStatus, err := client.Status()
+	if err == nil && strings.TrimSpace(mpdStatus["updating_db"]) != "" {
+		status.MPDUpdating = true
+	}
+
+	stats, err := client.Stats()
+	if err != nil {
+		return status, nil
+	}
+
+	dbUpdate := int64(intFromAny(stats["db_update"], 0))
+	if dbUpdate > 0 {
+		status.Stale = cacheIsStale(state, dbUpdate)
+		status.MPDDBUpdatedAt = time.Unix(dbUpdate, 0).UTC().Format(time.RFC3339)
+	}
+
+	return status, nil
 }
 
 func (a *app) saveCacheState(state cacheState) error {

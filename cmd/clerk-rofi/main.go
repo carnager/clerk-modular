@@ -75,6 +75,15 @@ type currentTrack struct {
 	Artist any `json:"artist"`
 }
 
+type cacheStatus struct {
+	Version        int64  `json:"version"`
+	UpdatedAt      string `json:"updated_at"`
+	Stale          bool   `json:"stale"`
+	MPDConnected   bool   `json:"mpd_connected"`
+	MPDUpdating    bool   `json:"mpd_updating"`
+	MPDDBUpdatedAt string `json:"mpd_db_updated_at"`
+}
+
 type apiClient struct {
 	baseURL              string
 	autoStartLocalDaemon bool
@@ -427,6 +436,25 @@ func (c *apiClient) post(path string, body any, out any) error {
 	return c.do(req, out, true)
 }
 
+func (c *apiClient) cacheStatus() (cacheStatus, error) {
+	var status cacheStatus
+	if err := c.get("cache/status", &status); err != nil {
+		return cacheStatus{}, err
+	}
+	return status, nil
+}
+
+func (c *apiClient) ensureFreshCache() error {
+	status, err := c.cacheStatus()
+	if err != nil {
+		return nil
+	}
+	if !status.Stale || status.MPDUpdating {
+		return nil
+	}
+	return c.post("cache/update", nil, nil)
+}
+
 func (c *apiClient) do(req *http.Request, out any, retryOnConnectError bool) error {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -484,6 +512,9 @@ func addAlbumUI(cfg config, client *apiClient, mode string) error {
 	endpoint := "albums"
 	if mode == "latest" {
 		endpoint = "latest_albums"
+	}
+	if err := client.ensureFreshCache(); err != nil {
+		return err
 	}
 	if err := client.get(endpoint, &albums); err != nil {
 		return err
@@ -543,6 +574,9 @@ func addAlbumUI(cfg config, client *apiClient, mode string) error {
 
 func addTrackUI(cfg config, client *apiClient) error {
 	var tracks []track
+	if err := client.ensureFreshCache(); err != nil {
+		return err
+	}
 	if err := client.get("tracks", &tracks); err != nil {
 		return err
 	}

@@ -89,6 +89,23 @@ func TestCacheStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCacheIsStale(t *testing.T) {
+	state := cacheState{
+		Version:   time.Unix(100, 0).UTC().UnixNano(),
+		UpdatedAt: time.Unix(100, 0).UTC().Format(time.RFC3339Nano),
+	}
+
+	if cacheIsStale(state, 0) {
+		t.Fatal("cacheIsStale() with zero db update should be false")
+	}
+	if cacheIsStale(state, 100) {
+		t.Fatal("cacheIsStale() with equal timestamps should be false")
+	}
+	if !cacheIsStale(state, 101) {
+		t.Fatal("cacheIsStale() with newer db update should be true")
+	}
+}
+
 func TestHandleCacheStatus(t *testing.T) {
 	tempDir := t.TempDir()
 	app := &app{

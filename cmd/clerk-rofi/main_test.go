@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -75,5 +76,61 @@ func TestAPIErrorMessagePrefersStructuredError(t *testing.T) {
 	want := "no tracks found in MPD for Example Artist - Example Album (2024)"
 	if got != want {
 		t.Fatalf("apiErrorMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestEnsureFreshCacheTriggersUpdateWhenStale(t *testing.T) {
+	requests := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/cache/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"version":1,"updated_at":"2026-04-12T00:00:00Z","stale":true,"mpd_connected":true,"mpd_updating":false}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/cache/update":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"message":"Cache updated"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &apiClient{
+		baseURL:    server.URL + "/api/v1",
+		httpClient: server.Client(),
+	}
+
+	if err := client.ensureFreshCache(); err != nil {
+		t.Fatalf("ensureFreshCache() error = %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(requests))
+	}
+}
+
+func TestEnsureFreshCacheSkipsUpdateWhileMPDIsUpdating(t *testing.T) {
+	requests := make([]string, 0, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/cache/status" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"version":1,"updated_at":"2026-04-12T00:00:00Z","stale":true,"mpd_connected":true,"mpd_updating":true}`))
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	client := &apiClient{
+		baseURL:    server.URL + "/api/v1",
+		httpClient: server.Client(),
+	}
+
+	if err := client.ensureFreshCache(); err != nil {
+		t.Fatalf("ensureFreshCache() error = %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("request count = %d, want 1", len(requests))
 	}
 }
