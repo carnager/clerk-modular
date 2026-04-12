@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -44,12 +45,19 @@ type paths struct {
 	TracksCacheFile  string
 	LatestCacheFile  string
 	RatingsCacheFile string
+	CacheStateFile   string
+}
+
+type cacheState struct {
+	Version   int64  `json:"version" msgpack:"version"`
+	UpdatedAt string `json:"updated_at" msgpack:"updated_at"`
 }
 
 type app struct {
-	cfg    config
-	paths  paths
-	logger *log.Logger
+	cfg       config
+	paths     paths
+	logger    *log.Logger
+	cacheLock sync.Mutex
 }
 
 func main() {
@@ -68,6 +76,8 @@ func main() {
 	if err := a.ensureStartupState(); err != nil {
 		logger.Fatalf("startup failed: %v", err)
 	}
+
+	go a.watchMPDDatabaseUpdates()
 
 	if err := a.serve(); err != nil {
 		logger.Fatalf("listen and serve: %v", err)
@@ -89,6 +99,7 @@ func loadConfig() (config, paths, error) {
 		TracksCacheFile:  filepath.Join(xdgData, "clerk", "tracks.cache"),
 		LatestCacheFile:  filepath.Join(xdgData, "clerk", "latest.cache"),
 		RatingsCacheFile: filepath.Join(xdgData, "clerk", "ratings.cache"),
+		CacheStateFile:   filepath.Join(xdgData, "clerk", "cache.state"),
 	}
 
 	if err := os.MkdirAll(pathCfg.DataDir, 0o755); err != nil {
@@ -252,6 +263,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/albums", a.handleAlbums)
 	mux.HandleFunc("GET /api/v1/latest_albums", a.handleLatestAlbums)
 	mux.HandleFunc("GET /api/v1/tracks", a.handleTracks)
+	mux.HandleFunc("GET /api/v1/cache/status", a.handleCacheStatus)
 	mux.HandleFunc("GET /api/v1/albums/{album_id}/rating", a.handleAlbumRatingGet)
 	mux.HandleFunc("POST /api/v1/albums/{album_id}/rating", a.handleAlbumRatingPost)
 	mux.HandleFunc("POST /api/v1/tracks/{track_id}/rating", a.handleTrackRatingPost)
@@ -277,9 +289,12 @@ func (a *app) ensureStartupState() error {
 		}
 	}
 	if a.allCachesExist() {
+		if err := a.ensureCacheState(); err != nil {
+			return err
+		}
 		return nil
 	}
-	return a.createCache()
+	return a.rebuildCache("startup")
 }
 
 func (a *app) allCachesExist() bool {
@@ -290,6 +305,20 @@ func (a *app) allCachesExist() bool {
 		}
 	}
 	return true
+}
+
+func (a *app) ensureCacheState() error {
+	if _, err := os.Stat(a.paths.CacheStateFile); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	state, err := a.deriveCacheState()
+	if err != nil {
+		return err
+	}
+	return a.saveCacheState(state)
 }
 
 func (a *app) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -330,6 +359,7 @@ func (a *app) handleAlbums(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	a.applyCacheStateHeaders(w)
 	writeJSON(w, http.StatusOK, attachAlbumRatings(albums, ratings))
 }
 
@@ -344,6 +374,7 @@ func (a *app) handleLatestAlbums(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	a.applyCacheStateHeaders(w)
 	writeJSON(w, http.StatusOK, attachAlbumRatings(albums, ratings))
 }
 
@@ -353,7 +384,18 @@ func (a *app) handleTracks(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	a.applyCacheStateHeaders(w)
 	writeJSON(w, http.StatusOK, tracks)
+}
+
+func (a *app) handleCacheStatus(w http.ResponseWriter, r *http.Request) {
+	state, err := a.loadCacheState()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	a.writeCacheStateHeaders(w, state)
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (a *app) handleAlbumRatingGet(w http.ResponseWriter, r *http.Request) {
@@ -633,11 +675,77 @@ func (a *app) handleRandomTracks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleCacheUpdate(w http.ResponseWriter, r *http.Request) {
-	if err := a.createCache(); err != nil {
+	if err := a.rebuildCache("api request"); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Cache update failed: " + err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Cache updated"})
+}
+
+func (a *app) rebuildCache(reason string) error {
+	a.cacheLock.Lock()
+	defer a.cacheLock.Unlock()
+
+	a.logger.Printf("cache rebuild: started (%s)", reason)
+	if err := a.createCache(); err != nil {
+		a.logger.Printf("cache rebuild: failed (%s): %v", reason, err)
+		return err
+	}
+	if err := a.saveCacheState(newCacheState(time.Now())); err != nil {
+		a.logger.Printf("cache rebuild: failed to save state (%s): %v", reason, err)
+		return err
+	}
+	a.logger.Printf("cache rebuild: finished (%s)", reason)
+	return nil
+}
+
+func (a *app) watchMPDDatabaseUpdates() {
+	network, address := mpdEndpoint(a.cfg.MPD.Address)
+	for {
+		watcher, err := mpd.NewWatcher(network, address, "", "database")
+		if err != nil {
+			a.logger.Printf("mpd watcher: connect failed: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		a.logger.Printf("mpd watcher: watching database updates on %s %s", network, address)
+		err = a.consumeMPDWatcher(watcher)
+		if closeErr := watcher.Close(); closeErr != nil {
+			a.logger.Printf("mpd watcher: close failed: %v", closeErr)
+		}
+		if err != nil {
+			a.logger.Printf("mpd watcher: restarting after error: %v", err)
+		} else {
+			a.logger.Printf("mpd watcher: restarting after disconnect")
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func (a *app) consumeMPDWatcher(watcher *mpd.Watcher) error {
+	for {
+		select {
+		case event, ok := <-watcher.Event:
+			if !ok {
+				return nil
+			}
+			if shouldRefreshForMPDEvent(event) {
+				if err := a.rebuildCache("mpd database update"); err != nil {
+					a.logger.Printf("mpd watcher: cache rebuild failed after %q event: %v", event, err)
+				}
+			}
+		case err, ok := <-watcher.Error:
+			if !ok {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+func shouldRefreshForMPDEvent(event string) bool {
+	return strings.TrimSpace(event) == "database"
 }
 
 func (a *app) handleCurrentAlbumRatingGet(w http.ResponseWriter, r *http.Request) {
@@ -1315,6 +1423,75 @@ func (a *app) loadTrackRatingsWithClient(client *mpd.Client) (map[string]string,
 		ratings[file] = stickers[i].Value
 	}
 	return ratings, nil
+}
+
+func newCacheState(updatedAt time.Time) cacheState {
+	updatedAt = updatedAt.UTC()
+	return cacheState{
+		Version:   updatedAt.UnixNano(),
+		UpdatedAt: updatedAt.Format(time.RFC3339Nano),
+	}
+}
+
+func (a *app) deriveCacheState() (cacheState, error) {
+	paths := []string{a.paths.AlbumCacheFile, a.paths.TracksCacheFile, a.paths.LatestCacheFile}
+	var newest time.Time
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return cacheState{}, err
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+	}
+	if newest.IsZero() {
+		newest = time.Now()
+	}
+	return newCacheState(newest), nil
+}
+
+func (a *app) loadCacheState() (cacheState, error) {
+	data, err := os.ReadFile(a.paths.CacheStateFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return a.deriveCacheState()
+		}
+		return cacheState{}, err
+	}
+	if len(data) == 0 {
+		return a.deriveCacheState()
+	}
+	var state cacheState
+	if err := msgpack.Unmarshal(data, &state); err != nil {
+		return cacheState{}, err
+	}
+	if state.Version == 0 || strings.TrimSpace(state.UpdatedAt) == "" {
+		return a.deriveCacheState()
+	}
+	return state, nil
+}
+
+func (a *app) saveCacheState(state cacheState) error {
+	data, err := msgpack.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(a.paths.CacheStateFile, data, 0o644)
+}
+
+func (a *app) applyCacheStateHeaders(w http.ResponseWriter) {
+	state, err := a.loadCacheState()
+	if err != nil {
+		return
+	}
+	a.writeCacheStateHeaders(w, state)
+}
+
+func (a *app) writeCacheStateHeaders(w http.ResponseWriter, state cacheState) {
+	w.Header().Set("X-Clerk-Cache-Version", strconv.FormatInt(state.Version, 10))
+	w.Header().Set("X-Clerk-Cache-Updated-At", state.UpdatedAt)
+	w.Header().Set("ETag", fmt.Sprintf("\"%d\"", state.Version))
 }
 
 func (a *app) updateTrackCacheRating(file, rating string) error {

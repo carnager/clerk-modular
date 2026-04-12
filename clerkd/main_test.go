@@ -1,10 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fhs/gompd/v2/mpd"
 )
@@ -41,6 +45,83 @@ func TestDefaultBindToAddress(t *testing.T) {
 	}
 	if binds[1] == "" {
 		t.Fatalf("defaultBindToAddress()[1] should not be empty")
+	}
+}
+
+func TestShouldRefreshForMPDEvent(t *testing.T) {
+	tests := []struct {
+		event string
+		want  bool
+	}{
+		{event: "database", want: true},
+		{event: " database ", want: true},
+		{event: "update", want: false},
+		{event: "player", want: false},
+		{event: "", want: false},
+	}
+
+	for _, tc := range tests {
+		if got := shouldRefreshForMPDEvent(tc.event); got != tc.want {
+			t.Fatalf("shouldRefreshForMPDEvent(%q) = %v, want %v", tc.event, got, tc.want)
+		}
+	}
+}
+
+func TestCacheStateRoundTrip(t *testing.T) {
+	tempDir := t.TempDir()
+	app := &app{
+		paths: paths{
+			CacheStateFile: filepath.Join(tempDir, "cache.state"),
+		},
+	}
+
+	want := newCacheState(time.Unix(123, 456).UTC())
+	if err := app.saveCacheState(want); err != nil {
+		t.Fatalf("saveCacheState() failed: %v", err)
+	}
+
+	got, err := app.loadCacheState()
+	if err != nil {
+		t.Fatalf("loadCacheState() failed: %v", err)
+	}
+	if got != want {
+		t.Fatalf("loadCacheState() = %#v, want %#v", got, want)
+	}
+}
+
+func TestHandleCacheStatus(t *testing.T) {
+	tempDir := t.TempDir()
+	app := &app{
+		paths: paths{
+			CacheStateFile: filepath.Join(tempDir, "cache.state"),
+		},
+	}
+
+	state := newCacheState(time.Unix(500, 0).UTC())
+	if err := app.saveCacheState(state); err != nil {
+		t.Fatalf("saveCacheState() failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil)
+	rec := httptest.NewRecorder()
+	app.handleCacheStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("handleCacheStatus() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("X-Clerk-Cache-Version"); got != "500000000000" {
+		t.Fatalf("X-Clerk-Cache-Version = %q, want %q", got, "500000000000")
+	}
+	if got := rec.Header().Get("X-Clerk-Cache-Updated-At"); got != state.UpdatedAt {
+		t.Fatalf("X-Clerk-Cache-Updated-At = %q, want %q", got, state.UpdatedAt)
+	}
+
+	var payload cacheState
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
+	if payload != state {
+		t.Fatalf("response payload = %#v, want %#v", payload, state)
 	}
 }
 
