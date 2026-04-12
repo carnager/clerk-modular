@@ -209,6 +209,40 @@ nix build .#clerk-musiclist
 nix build
 ```
 
+Using Clerk as a flake input:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    clerk.url = "github:carnager/clerk-modular?ref=latest";
+    clerk.inputs.nixpkgs.follows = "nixpkgs";
+  };
+}
+```
+
+Example package usage:
+
+```nix
+{
+  outputs = { self, nixpkgs, clerk }:
+    let
+      system = "x86_64-linux";
+      pkgs = import nixpkgs { inherit system; };
+    in
+    {
+      packages.${system}.default = pkgs.symlinkJoin {
+        name = "my-clerk";
+        paths = [
+          clerk.packages.${system}.clerkd
+          clerk.packages.${system}.clerk-rofi
+          clerk.packages.${system}.clerk-musiclist
+        ];
+      };
+    };
+}
+```
+
 ## Running
 
 Run the daemon from the repository root:
