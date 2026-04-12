@@ -243,6 +243,41 @@ Example package usage:
 }
 ```
 
+Using the Home Manager module:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager.url = "github:nix-community/home-manager";
+    home-manager.inputs.nixpkgs.follows = "nixpkgs";
+    clerk.url = "github:carnager/clerk-modular?ref=latest";
+    clerk.inputs.nixpkgs.follows = "nixpkgs";
+  };
+
+  outputs = { nixpkgs, home-manager, clerk, ... }: {
+    homeConfigurations.user = home-manager.lib.homeManagerConfiguration {
+      pkgs = import nixpkgs { system = "x86_64-linux"; };
+      modules = [
+        clerk.homeManagerModules.default
+        {
+          services.clerkd = {
+            enable = true;
+            settings = {
+              server.bind_to_address = [ "127.0.0.1:6601" ];
+              mpd.address = "localhost:6600";
+              random.tracks = 20;
+              random.artist_tag = "albumartist";
+              cache.batch_size = 10000;
+            };
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
 ## Running
 
 Run the daemon from the repository root:

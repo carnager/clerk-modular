@@ -111,5 +111,10 @@
           pkgs = import nixpkgs { inherit system; };
         in
         pkgs.nixfmt-rfc-style);
+
+      homeManagerModules = {
+        clerkd = import ./modules/home-manager/clerkd.nix { inherit self; };
+        default = self.homeManagerModules.clerkd;
+      };
     };
 }
